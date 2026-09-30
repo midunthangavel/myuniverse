@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 1. Synapse Cloud Backend Agent Engine
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synapse-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend/chroma_db:/app/backend/chroma_db
+      - ./backend/synapse_memory.db:/app/backend/synapse_memory.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  # 2. Synapse Web Simulator & Observability Studio
+  frontend:
+    image: node:20-alpine
+    container_name: synapse-frontend
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      backend:
+        condition: service_healthy

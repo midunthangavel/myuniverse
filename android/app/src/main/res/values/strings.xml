@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Synapse AI</string>
+    <string name="accessibility_service_desc">Synapse AI Accessibility Service allows your personal assistant to read active screen context and perform touch gestures on your behalf.</string>
+</resources>

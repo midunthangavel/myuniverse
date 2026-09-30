@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synapse — Autonomous Phone-Native Personal AI Agent</title>
+  <meta name="description" content="Phone-native multimodal personal AI agent with dynamic animated character, deep context understanding, structured personal memory, and permissioned action execution.">
+  
+  <!-- Modern Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Top Navigation Header -->
+    <header class="top-nav" id="main-header">
+      <div class="brand-section">
+        <div class="brand-logo">
+          <div class="logo-pulse"></div>
+          <svg class="logo-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+            <circle cx="12" cy="8" r="7" stroke-dasharray="2 3" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1 class="brand-title">SYNAPSE <span>AI</span></h1>
+          <p class="brand-subtitle">Autonomous Phone-Native Personal Agent</p>
+        </div>
+      </div>
+
+      <!-- Quick Demo Scenarios -->
+      <div class="quick-scenarios-bar">
+        <span class="scenarios-label">⚡ Try Scenarios:</span>
+        <button class="scenario-chip" data-scenario="movie" id="btn-scenario-movie">
+          🎬 “Book movie tonight”
+        </button>
+        <button class="scenario-chip" data-scenario="screen" id="btn-scenario-screen">
+          🔍 “What is on my screen?”
+        </button>
+        <button class="scenario-chip" data-scenario="biryani" id="btn-scenario-biryani">
+          🍛 “Find biryani nearby”
+        </button>
+        <button class="scenario-chip" data-scenario="meeting" id="btn-scenario-meeting">
+          📅 “Schedule with John”
+        </button>
+
+        <span class="proactive-divider">|</span>
+        <span class="scenarios-label proactive">🚨 Ambient Radar:</span>
+        <button class="proactive-chip" data-trigger="traffic_conflict" id="btn-proactive-traffic" title="Simulate ambient traffic delay alert">
+          🚗 Traffic Alert
+        </button>
+        <button class="proactive-chip" data-trigger="flight_delay" id="btn-proactive-flight" title="Simulate flight delay rescheduling">
+          ✈️ Flight Delay
+        </button>
+        <button class="proactive-chip" data-trigger="imax_seat_alert" id="btn-proactive-seat" title="Simulate center seat opening alert">
+          🎟️ Seat Released
+        </button>
+        <button class="proactive-chip chain" data-chain="movie_and_dinner" id="btn-run-chain" title="Execute multi-app chained workflow">
+          🔗 Multi-App Chain
+        </button>
+        <button class="showcase-chip" id="btn-play-showcase" title="Run 12-Step Day-in-the-Life End-to-End Showcase">
+          ✨ Play Showcase
+        </button>
+        <span class="proactive-divider">|</span>
+        <span class="scenarios-label hardware">⚡ Physical Phone:</span>
+        <button class="scenario-chip hw-chip" id="btn-hw-calc-add" title="Open calculator and calculate 2 + 2">
+          🔢 Calc: 2 + 2
+        </button>
+        <button class="scenario-chip hw-chip" id="btn-hw-chrome-search" title="Open Google Chrome and search 'hi'">
+          🌐 Chrome: Search "hi"
+        </button>
+        <button class="scenario-chip hw-chip" id="btn-hw-images-tab" title="Navigate to Images tab in Google Chrome">
+          🖼️ Images Tab
+        </button>
+        <button class="scenario-chip hw-chip" id="btn-hw-calc-mul" title="Open calculator and calculate 8 × 9">
+          ✖️ Calc: 8 × 9
+        </button>
+      </div>
+
+      <!-- Header Controls -->
+      <div class="header-controls">
+        <div class="character-selector-pill">
+          <label for="char-select">Avatar:</label>
+          <select id="char-select" class="custom-select">
+            <option value="nova" selected>Nova (Holo-AI)</option>
+            <option value="pixel">Pixel (CyberBot)</option>
+            <option value="astra">Astra (Quantum Orb)</option>
+          </select>
+        </div>
+
+        <button class="control-btn" id="btn-voice-toggle" title="Toggle Voice Output (TTS)">
+          <span class="btn-icon">🔊</span>
+          <span class="btn-label" id="voice-label">Voice ON</span>
+        </button>
+
+        <div class="agent-status-badge" id="agent-connection-status">
+          <span class="status-dot"></span>
+          <span class="status-text">Agent Online</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace Studio -->
+    <main class="workspace-grid">
+      
+      <!-- LEFT STAGE: The Phone Simulator with Living Character -->
+      <section class="phone-stage-panel" id="phone-stage">
+        <div class="panel-header">
+          <div class="panel-title-wrapper">
+            <div class="device-source-switch" id="device-source-switch">
+              <button class="mode-toggle-btn active" id="btn-mode-sim" data-mode="simulator">
+                📱 Web Simulator
+              </button>
+              <button class="mode-toggle-btn" id="btn-mode-hardware" data-mode="android">
+                ⚡ Real Phone: Redmi Note 10S
+                <span class="live-pulse-dot"></span>
+              </button>
+            </div>
+            <span class="phone-model-tag" id="phone-model-tag">Redmi Note 10S • Android 13 • 1080x2400</span>
+          </div>
+          <div class="phone-view-controls">
+            <button class="view-chip active" id="btn-nav-home">Home</button>
+            <button class="view-chip" id="btn-nav-mail">Mail</button>
+            <button class="view-chip" id="btn-nav-movies">Cinema</button>
+            <button class="view-chip" id="btn-nav-food">Foodie</button>
+            <button class="view-chip" id="btn-nav-rides">PulseRide</button>
+            <button class="view-chip" id="btn-nav-maps">Orbit Maps</button>
+            <button class="view-chip inspect-btn" id="btn-toggle-screen-inspector" title="Toggle Accessibility & Screen Node overlay">
+              Inspect Screen Nodes
+            </button>
+          </div>
+        </div>
+
+        <!-- Phone Mockup Chassis -->
+        <div class="phone-chassis-container">
+          <div class="phone-chassis" id="phone-chassis">
+            
+            <!-- Phone Hardware Elements -->
+            <div class="chassis-side-button vol-up"></div>
+            <div class="chassis-side-button vol-down"></div>
+            <div class="chassis-side-button power-btn"></div>
+            
+            <!-- Phone Screen Glass -->
+            <div class="phone-screen" id="phone-screen">
+              
+              <!-- Screen Ambient Highlights -->
+              <div class="screen-glass-glare"></div>
+
+              <!-- Status Bar -->
+              <div class="phone-status-bar">
+                <span class="status-time" id="phone-live-time">09:41</span>
+                <div class="dynamic-island" id="dynamic-island">
+                  <div class="island-camera"></div>
+                  <div class="island-sensor"></div>
+                  <div class="island-activity" id="island-activity">
+                    <span class="island-dot"></span>
+                    <span class="island-text">Agent Active</span>
+                  </div>
+                </div>
+                <div class="status-icons">
+                  <span class="status-icon">5G</span>
+                  <span class="status-icon">📶</span>
+                  <span class="status-icon">🔋 98%</span>
+                </div>
+              </div>
+
+              <!-- Active App Viewport (Web Simulator) -->
+              <div class="phone-content-viewport" id="phone-viewport">
+                <!-- Dynamically rendered by phone.js (Home, Mail, Cinema, Foodie, Calendar) -->
+              </div>
+
+              <!-- Real Android Device Live Mirror Feed (Physical Phone) -->
+              <div class="real-phone-mirror-container hidden" id="real-phone-mirror-container">
+                <img id="real-phone-mirror-img" src="/api/device/screen.png" alt="Live Physical Phone Mirror" />
+                <div class="mirror-overlay" id="mirror-touch-overlay"></div>
+                <div class="mirror-status-bar-pill" id="mirror-status-pill">
+                  <span class="pulse-indicator"></span>
+                  <span class="mirror-status-text" id="mirror-status-text">Redmi Note 10S • Live ADB Mirror</span>
+                  <button class="mirror-refresh-btn" id="btn-refresh-mirror" title="Refresh Live Screen">🔄 Refresh</button>
+                </div>
+              </div>
+
+              <!-- Accessibility Screen Overlay (Vision/Grounding visualizer) -->
+              <div class="screen-inspector-overlay hidden" id="screen-inspector-overlay">
+                <div class="inspector-badge">ACCESSIBILITY TREE INSPECTION ACTIVE</div>
+                <div class="node-bounding-boxes" id="node-bounding-boxes"></div>
+              </div>
+
+              <!-- Autonomous Agent Tap & Gesture Indicator (Action Execution) -->
+              <div class="agent-touch-cursor hidden" id="agent-touch-cursor">
+                <div class="cursor-ripple"></div>
+                <div class="cursor-dot"></div>
+                <span class="cursor-action-label" id="cursor-action-label">Tapping</span>
+              </div>
+
+              <!-- THE LIVING CHARACTER (Floating On-Device Entity) -->
+              <div class="character-entity-wrapper" id="character-entity-wrapper">
+                <div class="character-card-dock" id="character-dock">
+                  
+                  <!-- Character Visual Rig (Interactive Canvas) -->
+                  <div class="character-avatar-container" id="character-avatar-container">
+                    <canvas id="character-canvas" width="220" height="220"></canvas>
+                    
+                    <!-- State Indicator Glow Ring -->
+                    <div class="character-aura-ring" id="character-aura"></div>
+                  </div>
+
+                  <!-- Character Mood / State Label -->
+                  <div class="character-state-pill" id="character-state-pill">
+                    <span class="state-icon" id="state-icon">●</span>
+                    <span class="state-name" id="character-state-name">IDLE</span>
+                  </div>
+
+                  <!-- Speech Bubble / Live Thought Caption -->
+                  <div class="character-speech-bubble" id="character-speech-bubble">
+                    <p class="speech-text" id="character-speech-text">
+                      "I'm Synapse. Tell me what you'd like done, or ask me about what's on your screen!"
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bottom Assistant Prompt Sheet / Interaction Drawer -->
+              <div class="assistant-drawer" id="assistant-drawer">
+                <div class="drawer-handle" id="drawer-handle"></div>
+                
+                <div class="prompt-input-row">
+                  <button class="voice-mic-btn" id="btn-mic" title="Speak to Assistant">
+                    <span class="mic-wave"></span>
+                    <svg class="mic-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" y1="19" x2="12" y2="23"/>
+                      <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                  </button>
+
+                  <div class="input-field-container">
+                    <input 
+                      type="text" 
+                      id="agent-user-input" 
+                      placeholder="Tell Synapse what you need done..." 
+                      autocomplete="off"
+                    />
+                    <button class="send-action-btn" id="btn-send-input" title="Execute Task">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"/>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Live Audio Visualizer Canvas for Speech -->
+                <canvas id="audio-visualizer-canvas" class="audio-visualizer hidden" width="300" height="28"></canvas>
+              </div>
+
+              <!-- High-Risk / Medium-Risk Confirmation Dialog Modal (Human In The Loop) -->
+              <div class="permission-approval-modal hidden" id="approval-modal">
+                <div class="modal-card">
+                  <div class="modal-header">
+                    <span class="risk-badge" id="modal-risk-badge">HIGH RISK ACTION</span>
+                    <button class="modal-close" id="btn-approval-cancel">✕</button>
+                  </div>
+                  <h3 class="modal-title" id="modal-action-title">Approve Movie Ticket Purchase?</h3>
+                  <div class="modal-details" id="modal-action-details">
+                    <!-- Populated dynamically -->
+                  </div>
+                  <div class="modal-actions">
+                    <button class="modal-btn secondary" id="btn-deny-action">Cancel Task</button>
+                    <button class="modal-btn primary" id="btn-confirm-action">
+                      <span class="biometric-icon">🔒</span> Authorize & Execute
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            </div> <!-- /phone-screen -->
+          </div> <!-- /phone-chassis -->
+
+          <!-- Hardware Navigation Bar for Physical Phone -->
+          <div class="hardware-nav-bar hidden" id="hardware-nav-bar">
+            <button class="hw-btn" id="btn-hw-back" title="Back (Keyevent 4)">
+              <span>◀</span> Back
+            </button>
+            <button class="hw-btn" id="btn-hw-home" title="Home (Keyevent 3)">
+              <span>⭘</span> Home
+            </button>
+            <button class="hw-btn" id="btn-hw-apps" title="Recent Apps (Keyevent 187)">
+              <span>▢</span> Recents
+            </button>
+            <button class="hw-btn" id="btn-hw-wake" title="Wake / Unlock (Keyevent 224)">
+              <span>⚡</span> Wake
+            </button>
+          </div>
+        </div> <!-- /phone-chassis-container -->
+      </section>
+
+      <!-- RIGHT STAGE: Agent Brain, Reasoning Stream & Memory Inspector -->
+      <section class="brain-observability-panel" id="brain-panel">
+        
+        <!-- Observability Tabs -->
+        <div class="brain-tabs-header">
+          <button class="brain-tab active" data-tab="reasoning" id="tab-btn-reasoning">
+            <span class="tab-icon">⚡</span>
+            <span>Reasoning & Action Stream</span>
+          </button>
+          <button class="brain-tab" data-tab="memory" id="tab-btn-memory">
+            <span class="tab-icon">🧠</span>
+            <span>Personal Memory Engine</span>
+            <span class="badge-count" id="memory-count-badge">8</span>
+          </button>
+          <button class="brain-tab" data-tab="permissions" id="tab-btn-permissions">
+            <span class="tab-icon">🛡️</span>
+            <span>Trust & Guardrails</span>
+          </button>
+          <button class="brain-tab" data-tab="architecture" id="tab-btn-architecture">
+            <span class="tab-icon">🌐</span>
+            <span>Context FS & 4-Engine Stack</span>
+            <span class="badge-count" style="background: rgba(168, 85, 247, 0.2); color: #c084fc;">4 Repos</span>
+          </button>
+          <button class="brain-tab" data-tab="explorer" id="tab-btn-explorer">
+            <span class="tab-icon">🧭</span>
+            <span>App Explorer & Vector Memory</span>
+            <span class="badge-count" id="explorer-badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8;">ChromaDB</span>
+          </button>
+        </div>
+
+        <!-- TAB 1: Realtime Reasoning & Action Execution Stream -->
+        <div class="tab-content active" id="tab-reasoning">
+          <div class="stream-toolbar">
+            <div class="stream-status">
+              <span class="pulse-indicator"></span>
+              <span id="agent-loop-phase">Agent Idle • Ready for command</span>
+            </div>
+            <button class="clear-stream-btn" id="btn-clear-logs">Clear Stream</button>
+          </div>
+
+          <!-- Chronological Step-by-Step Execution Feed -->
+          <div class="reasoning-feed-container" id="reasoning-feed">
+            <div class="empty-feed-placeholder" id="empty-feed-placeholder">
+              <div class="placeholder-icon">🤖</div>
+              <h4>Agent Waiting for Instruction</h4>
+              <p>Type a request above or select a scenario chip (e.g. <em>“Book movie tonight”</em> or <em>“What is on my screen?”</em>) to watch the agent plan, fetch personal memories, navigate apps, and execute phone tasks.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: Personal Memory & Structured Profile Engine -->
+        <div class="tab-content" id="tab-memory">
+          <div class="memory-engine-header">
+            <div class="memory-intro">
+              <h3>Structured Personal Memory Model</h3>
+              <p>The agent uses these permissioned facts and learned patterns to personalize every decision. Try editing or adding new memories!</p>
+            </div>
+            <button class="add-memory-btn" id="btn-add-memory">+ Add Memory</button>
+          </div>
+
+          <!-- Continuous Personalization Flywheel Live Banner -->
+          <div class="flywheel-banner" id="flywheel-banner">
+            <div class="flywheel-header">
+              <div class="flywheel-title-box">
+                <span class="flywheel-badge">AUTONOMOUS FLYWHEEL</span>
+                <h4 id="flywheel-status-text">Learning Momentum: ACCELERATING 🚀</h4>
+              </div>
+              <div class="flywheel-stat-pill">
+                <span>Model Efficiency:</span> <strong id="flywheel-efficiency-val">98.5%</strong>
+              </div>
+            </div>
+            <div class="flywheel-metrics-row">
+              <div class="f-metric">
+                <span class="f-val" id="f-total-obs">27</span>
+                <span class="f-lbl">Observed Actions</span>
+              </div>
+              <div class="f-metric">
+                <span class="f-val" id="f-habits-count">3</span>
+                <span class="f-lbl">Inferred Habits</span>
+              </div>
+              <div class="f-metric">
+                <span class="f-val" id="f-high-conf-count">2</span>
+                <span class="f-lbl">High-Confidence (>85%)</span>
+              </div>
+              <div class="f-metric">
+                <span class="f-val" style="color: #38bdf8;">ChromaDB</span>
+                <span class="f-lbl">Dense Vector Sync</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="memory-categories-grid">
+            
+            <!-- Category: Explicit Preferences -->
+            <div class="memory-category-card">
+              <div class="cat-header">
+                <span class="cat-icon">⭐</span>
+                <h4>Explicit User Preferences</h4>
+                <span class="cat-tag">User-Defined</span>
+              </div>
+              <ul class="memory-item-list" id="explicit-memory-list">
+                <!-- Dynamically populated by memory.js -->
+              </ul>
+            </div>
+
+            <!-- Category: Learned Habits & Confidence -->
+            <div class="memory-category-card">
+              <div class="cat-header">
+                <span class="cat-icon">📈</span>
+                <h4>Learned Behavioral Patterns</h4>
+                <span class="cat-tag">Inferred Context</span>
+              </div>
+              <ul class="memory-item-list" id="learned-memory-list">
+                <!-- Dynamically populated by memory.js -->
+              </ul>
+            </div>
+
+            <!-- Category: People & Places -->
+            <div class="memory-category-card">
+              <div class="cat-header">
+                <span class="cat-icon">📍</span>
+                <h4>Entities & Locations</h4>
+                <span class="cat-tag">Graph Memory</span>
+              </div>
+              <ul class="memory-item-list" id="entities-memory-list">
+                <!-- Dynamically populated by memory.js -->
+              </ul>
+            </div>
+
+            <!-- Category: Routines & Schedule -->
+            <div class="memory-category-card">
+              <div class="cat-header">
+                <span class="cat-icon">⏱️</span>
+                <h4>Daily Schedule & Constraints</h4>
+                <span class="cat-tag">Rules</span>
+              </div>
+              <ul class="memory-item-list" id="routine-memory-list">
+                <!-- Dynamically populated by memory.js -->
+              </ul>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- TAB 3: Permission & Trust Guardrails Console -->
+        <div class="tab-content" id="tab-permissions">
+          <div class="trust-console-header">
+            <h3>Phone OS Permission & Risk Tiering</h3>
+            <p>Every autonomous action is evaluated against this 3-tier risk matrix before execution on the device.</p>
+          </div>
+
+          <div class="permission-toggles-grid">
+            <div class="perm-card">
+              <div class="perm-info">
+                <div class="perm-title">
+                  <span class="perm-icon">👁️</span>
+                  <strong>Accessibility & Screen Read</strong>
+                </div>
+                <p>Allows the agent to parse active screen nodes, read emails, and interpret app UI.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="perm-screen-read" checked>
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <div class="perm-card">
+              <div class="perm-info">
+                <div class="perm-title">
+                  <span class="perm-icon">👆</span>
+                  <strong>On-Screen Touch & Tap Injection</strong>
+                </div>
+                <p>Enables the agent to tap buttons, scroll listings, and input form text.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="perm-touch-inject" checked>
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <div class="perm-card">
+              <div class="perm-info">
+                <div class="perm-title">
+                  <span class="perm-icon">📅</span>
+                  <strong>Calendar & Contacts Access</strong>
+                </div>
+                <p>Read schedules, detect meeting conflicts, look up colleague details.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="perm-calendar-access" checked>
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <div class="perm-card">
+              <div class="perm-info">
+                <div class="perm-title">
+                  <span class="perm-icon">💳</span>
+                  <strong>Financial Transactions (High Risk)</strong>
+                </div>
+                <p>Requires explicit biometric or PIN authorization before any card payment or booking.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="perm-biometric-gate" checked>
+                <span class="slider round"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Risk Hierarchy Matrix Visualizer -->
+          <div class="risk-matrix-table-container">
+            <h4>Execution Policy Matrix</h4>
+            <table class="risk-table">
+              <thead>
+                <tr>
+                  <th>Risk Tier</th>
+                  <th>Examples</th>
+                  <th>Action Protocol</th>
+                  <th>Character State</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="tier-badge low">LOW RISK</span></td>
+                  <td>Read email, search movies, check weather, set alarm</td>
+                  <td>Autonomous Execution</td>
+                  <td><code>WORKING</code> ➔ <code>SUCCESS</code></td>
+                </tr>
+                <tr>
+                  <td><span class="tier-badge medium">MEDIUM RISK</span></td>
+                  <td>Create calendar invite, save draft, update contact</td>
+                  <td>1-Tap Quick Confirmation</td>
+                  <td><code>WAITING_CONFIRM</code></td>
+                </tr>
+                <tr>
+                  <td><span class="tier-badge high">HIGH RISK</span></td>
+                  <td>Movie ticket purchase, food checkout, data deletion</td>
+                  <td>Biometric / Explicit PIN Approval</td>
+                  <td><code>WAITING_CONFIRM</code> ➔ <code>SPEAKING</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB 4: Integrated Engine Architecture (OpenViking, Scrapling, Laya, QwenPaw) -->
+        <div class="tab-content" id="tab-architecture">
+          <div class="architecture-header">
+            <div class="arch-badge-row">
+              <span class="arch-pill laya">Laya • System 1</span>
+              <span class="arch-pill viking">OpenViking • viking://</span>
+              <span class="arch-pill scrapling">Scrapling • Web Intel</span>
+              <span class="arch-pill paw">QwenPaw • ReMe Loop</span>
+            </div>
+            <h3>Integrated 4-Repository Engine Stack</h3>
+            <p>Direct architectural synthesis of <strong>Scrapling</strong>, <strong>QwenPaw</strong>, <strong>OpenViking</strong>, and <strong>Laya</strong> powering Synapse's phone-native agent.</p>
+          </div>
+
+          <!-- 4-Card Architecture Showcase Grid -->
+          <div class="arch-grid">
+            
+            <!-- ENGINE 1: OpenViking Virtual Context Filesystem -->
+            <div class="arch-card">
+              <div class="arch-card-header">
+                <div class="arch-card-title">
+                  <span class="arch-icon">📂</span>
+                  <div>
+                    <h4>OpenViking Context Filesystem</h4>
+                    <span class="arch-sub">viking:// Virtual Hierarchy & L0/L1/L2 Progressive Disclosure</span>
+                  </div>
+                </div>
+                <span class="token-savings-badge">~80% Token Savings</span>
+              </div>
+
+              <div class="viking-browser-controls">
+                <label for="viking-uri-select">Context Path:</label>
+                <select id="viking-uri-select" class="viking-select">
+                  <option value="viking://user/habits/cinema.json" selected>viking://user/habits/cinema.json</option>
+                  <option value="viking://user/habits/food.json">viking://user/habits/food.json</option>
+                  <option value="viking://user/profile.md">viking://user/profile.md</option>
+                  <option value="viking://resources/cinepass/schema.json">viking://resources/cinepass/schema.json</option>
+                  <option value="viking://resources/bitego/schema.json">viking://resources/bitego/schema.json</option>
+                  <option value="viking://skills/book_movie_imax.json">viking://skills/book_movie_imax.json</option>
+                </select>
+              </div>
+
+              <div class="viking-tier-selector">
+                <span class="tier-label">Retrieval Tier:</span>
+                <div class="tier-buttons" id="viking-tier-buttons">
+                  <button class="tier-btn" data-tier="L0">L0 (Abstract • ~25 toks)</button>
+                  <button class="tier-btn active" data-tier="L1">L1 (Overview • ~100 toks)</button>
+                  <button class="tier-btn" data-tier="L2">L2 (Full Detail • ~500 toks)</button>
+                </div>
+              </div>
+
+              <div class="viking-content-box">
+                <div class="viking-meta-bar">
+                  <span id="viking-token-est">Estimated Tokens: 44</span>
+                  <span id="viking-tier-indicator" class="tier-badge-pill">TIER: L1</span>
+                </div>
+                <pre class="viking-preview" id="viking-content-preview">Loading OpenViking context node...</pre>
+              </div>
+            </div>
+
+            <!-- ENGINE 2: Laya System 1 Fast Decision Engine -->
+            <div class="arch-card">
+              <div class="arch-card-header">
+                <div class="arch-card-title">
+                  <span class="arch-icon">⚡</span>
+                  <div>
+                    <h4>Laya System 1 Decision Engine</h4>
+                    <span class="arch-sub">Non-Autoregressive Fast Gating (&lt;15ms) • Choice, Score, Noul</span>
+                  </div>
+                </div>
+                <span class="latency-badge" id="laya-latency-display">~0.4ms Latency</span>
+              </div>
+
+              <div class="laya-test-bar">
+                <input type="text" id="laya-test-input" placeholder="Type prompt (e.g. 'Book IMAX tickets tonight' or 'Delete all')" value="Book IMAX tickets for Dune tonight">
+                <button class="arch-action-btn" id="btn-run-laya-test">Classify</button>
+              </div>
+
+              <div class="laya-results-grid" id="laya-results-view">
+                <div class="laya-metric-card">
+                  <span class="m-lbl">CHOICE (Intent)</span>
+                  <strong class="m-val highlight" id="laya-choice-val">CINEMA_BOOKING</strong>
+                </div>
+                <div class="laya-metric-card">
+                  <span class="m-lbl">SCORE (Confidence)</span>
+                  <strong class="m-val" id="laya-score-val">0.691 (69%)</strong>
+                </div>
+                <div class="laya-metric-card">
+                  <span class="m-lbl">NOUL (Safety Gate)</span>
+                  <strong class="m-val safe" id="laya-noul-val">✓ SAFE (Passed)</strong>
+                </div>
+                <div class="laya-metric-card">
+                  <span class="m-lbl">GOVERNANCE MODE</span>
+                  <strong class="m-val warn" id="laya-gov-val">ASK (Biometric)</strong>
+                </div>
+              </div>
+
+              <div class="laya-context-preloads">
+                <span class="preload-lbl">Auto-Dispatched viking:// Context Preloads:</span>
+                <div class="preload-tags" id="laya-preload-tags">
+                  <span class="p-tag">viking://user/habits/cinema.json</span>
+                  <span class="p-tag">viking://resources/cinepass/schema.json</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ENGINE 3: Scrapling Stealth & Adaptive Web Intelligence -->
+            <div class="arch-card">
+              <div class="arch-card-header">
+                <div class="arch-card-title">
+                  <span class="arch-icon">🕷️</span>
+                  <div>
+                    <h4>Scrapling Web Intelligence</h4>
+                    <span class="arch-sub">Stealth Headers, Anti-Bot Bypass & Adaptive Selectors</span>
+                  </div>
+                </div>
+                <span class="stealth-badge">Stealth Fingerprint: S24 Ultra</span>
+              </div>
+
+              <div class="scrapling-test-bar">
+                <input type="text" id="scrapling-query-input" placeholder="Query web intel..." value="Dune IMAX tickets tonight">
+                <button class="arch-action-btn" id="btn-run-scrapling-test">Live Research</button>
+              </div>
+
+              <div class="scrapling-output-box" id="scrapling-output-box">
+                <div class="web-result-item">
+                  <div class="web-res-title">🎬 IMAX Downtown Megaplex — Today's Schedule</div>
+                  <div class="web-res-snippet">Dune Part Two in 70mm IMAX. Center seats in Row G/H available for 8:15 PM and 10:45 PM. Dolby Atmos verified.</div>
+                  <span class="web-res-url">https://cinepass.example.com/theaters/imax-downtown</span>
+                </div>
+                <div class="web-result-item">
+                  <div class="web-res-title">⭐ Rotten Tomatoes: Dune Part Two Verified Audience Score</div>
+                  <div class="web-res-snippet">95% Audience Score. A visual masterclass with breathtaking scale that demands to be seen on the biggest possible IMAX screen.</div>
+                  <span class="web-res-url">https://rottentomatoes.com/m/dune_part_two</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ENGINE 4: QwenPaw Mobile Agent OS Loop & ReMe Memory -->
+            <div class="arch-card">
+              <div class="arch-card-header">
+                <div class="arch-card-title">
+                  <span class="arch-icon">🐾</span>
+                  <div>
+                    <h4>QwenPaw Mobile Agent OS</h4>
+                    <span class="arch-sub">3-Layer ReMe Memory & Composable ALLOW / ASK / DENY Loop</span>
+                  </div>
+                </div>
+                <span class="loop-budget-badge">Max Steps: 8 (Anti-Runaway)</span>
+              </div>
+
+              <div class="reme-layers-grid">
+                <div class="reme-layer-box">
+                  <div class="layer-title">Layer 1: Working Memory</div>
+                  <div class="layer-status">Step: <strong id="reme-working-step">0 / 8</strong> • Mode: <strong id="reme-working-mode" style="color: #38bdf8;">ALLOW</strong></div>
+                  <p class="layer-desc">Active task variables, volatile UI node coordinates, step counters.</p>
+                </div>
+                <div class="reme-layer-box">
+                  <div class="layer-title">Layer 2: Episodic History</div>
+                  <div class="layer-status">Logged Turns: <strong id="reme-turns-count">6 Verbatim Turns</strong></div>
+                  <p class="layer-desc">Exact user utterances, screen perception snapshots, tool outputs.</p>
+                </div>
+                <div class="reme-layer-box">
+                  <div class="layer-title">Layer 3: Evolving Profile</div>
+                  <div class="layer-status">Auto-Dream: <strong style="color: #10b981;">Active</strong></div>
+                  <p class="layer-desc">Continuous Markdown knowledge graph self-updating via Auto-Memory.</p>
+                </div>
+              </div>
+
+              <div class="governance-rule-preview">
+                <div class="gov-rule allow">
+                  <span class="g-badge">ALLOW</span>
+                  <span>Autonomous screen reads, web scraping, and UI navigation</span>
+                </div>
+                <div class="gov-rule ask">
+                  <span class="g-badge">ASK</span>
+                  <span>Biometric approval required for bookings, payments, and emails</span>
+                </div>
+                <div class="gov-rule deny">
+                  <span class="g-badge">DENY</span>
+                  <span>Permanently blocked: Factory reset, exporting credentials, OS overrides</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- TAB 5: Autonomous App Explorer & UI Vector Memory Engine -->
+        <div class="tab-content" id="tab-explorer">
+          <div class="explorer-engine-header">
+            <div class="explorer-intro">
+              <div class="arch-badge-row">
+                <span class="arch-pill laya">Autonomous Crawler</span>
+                <span class="arch-pill viking">ChromaDB HNSW</span>
+                <span class="arch-pill scrapling">Zero-Hardcoding</span>
+              </div>
+              <h3>Autonomous App Explorer & UI Vector Memory</h3>
+              <p>Traverses mobile applications, discovers interactive UI components, computes bounding box centers, and indexes rich semantic affordances into <strong>ChromaDB dense vector memory</strong> for instant natural language action retrieval.</p>
+            </div>
+            
+            <div class="explorer-top-actions">
+              <div class="app-picker-group">
+                <label for="explorer-app-select">Target Application:</label>
+                <select id="explorer-app-select" class="custom-select">
+                  <option value="com.miui.calculator" selected>MIUI Calculator (Physical / Native)</option>
+                  <option value="com.android.chrome">Google Chrome Browser</option>
+                  <option value="com.android.settings">Android System Settings</option>
+                  <option value="cinema">CinePass IMAX Experience</option>
+                  <option value="food">BiteGo Delivery Express</option>
+                </select>
+              </div>
+              <button class="btn primary" id="btn-trigger-crawl">
+                <span class="btn-icon">🚀</span>
+                <span id="crawl-btn-label">Run Autonomous Crawl</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Explorer Telemetry Stats -->
+          <div class="explorer-metrics-row">
+            <div class="f-metric">
+              <span class="f-val" id="exp-total-screens">2</span>
+              <span class="f-lbl">Discovered Screens</span>
+            </div>
+            <div class="f-metric">
+              <span class="f-val" id="exp-total-elements" style="color: #38bdf8;">28</span>
+              <span class="f-lbl">UI Buttons Indexed</span>
+            </div>
+            <div class="f-metric">
+              <span class="f-val" id="exp-vector-engine" style="color: #10b981;">Active</span>
+              <span class="f-lbl">ChromaDB Vector Store</span>
+            </div>
+            <div class="f-metric">
+              <span class="f-val" id="exp-fs-status" style="color: #c084fc;">viking://</span>
+              <span class="f-lbl">Navigation Graph</span>
+            </div>
+          </div>
+
+          <!-- Semantic UI Vector Search Bar -->
+          <div class="explorer-search-card">
+            <h4>🔍 Semantic UI Affordance Vector Search</h4>
+            <p>Type any natural language intent to query ChromaDB and retrieve the exact button coordinates on the active phone screen:</p>
+            <div class="explorer-search-input-row">
+              <input type="text" id="explorer-query-input" placeholder="e.g. 'clear screen', 'convert foreign currency', 'divide numbers', 'voice mic search'" value="convert foreign currency">
+              <button class="btn secondary" id="btn-explorer-search">Search Vector Memory</button>
+            </div>
+            
+            <div class="explorer-search-results" id="explorer-search-results">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Discovered UI Affordances Grid -->
+          <div class="explorer-elements-section">
+            <div class="section-subhead">
+              <h4>Indexed UI Buttons & Affordances</h4>
+              <span class="subhead-pill" id="explorer-elements-pill">28 Actionable Elements</span>
+            </div>
+            <div class="explorer-elements-grid" id="explorer-elements-grid">
+              <!-- Dynamically populated cards -->
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- Modal for adding explicit memory -->
+    <div class="custom-modal-backdrop hidden" id="add-memory-modal">
+      <div class="custom-modal-dialog">
+        <div class="modal-dialog-header">
+          <h3>Add Personal Preference / Rule</h3>
+          <button class="close-dialog-btn" id="btn-close-memory-modal">✕</button>
+        </div>
+        <div class="modal-dialog-body">
+          <div class="form-group">
+            <label for="mem-category-select">Category:</label>
+            <select id="mem-category-select" class="form-control">
+              <option value="explicit">Explicit Preference (e.g. food, theater)</option>
+              <option value="routine">Routine / Constraint (e.g. timing)</option>
+              <option value="entities">Entity / Location (e.g. favorite place)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="mem-text-input">Memory Statement:</label>
+            <input type="text" id="mem-text-input" class="form-control" placeholder="e.g. Never order cilantro; prefer window seat on flights">
+          </div>
+        </div>
+        <div class="modal-dialog-footer">
+          <button class="btn secondary" id="btn-cancel-memory">Cancel</button>
+          <button class="btn primary" id="btn-save-memory">Save to Personal Engine</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
