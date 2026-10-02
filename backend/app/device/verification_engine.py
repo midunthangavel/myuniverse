@@ -103,6 +103,83 @@ class TaskVerificationEngine:
             "disappeared_elements": disappeared[:5]
         }
 
+    def verify_wss_result(
+        self,
+        result: Dict[str, Any],
+        expected: Dict[str, Any],
+        pre_fingerprint: Optional[str] = None
+    ) -> VerificationResult:
+        """
+        Phase G Verification: Verifies semantic expected outcomes using the WSS protocol observation.
+        Replaces legacy generic UI change detection.
+        """
+        post_fingerprint = result.get("screen_fingerprint")
+        
+        # Fast path: O(1) fingerprint comparison
+        if expected.get("screen_change", True) and pre_fingerprint and post_fingerprint == pre_fingerprint:
+            return VerificationResult(
+                verified=False,
+                confidence=1.0,
+                reason="Screen fingerprint is identical. No state transition occurred.",
+                screen_transition_detected=False
+            )
+            
+        observation = result.get("observation", {})
+        fg_package = observation.get("foreground_package", "")
+        visible_nodes = observation.get("visible_nodes", [])
+        
+        # 1. Verify Expected Foreground Package
+        exp_pkg = expected.get("foreground_package")
+        if exp_pkg and exp_pkg.lower() not in fg_package.lower():
+            return VerificationResult(
+                verified=False,
+                confidence=0.9,
+                reason=f"Expected package '{exp_pkg}' but got '{fg_package}'.",
+                screen_transition_detected=True
+            )
+            
+        # 2. Verify Semantic Expected Element
+        exp_elem = expected.get("element_present")
+        if exp_elem:
+            exp_lower = exp_elem.lower()
+            found = False
+            for node in visible_nodes:
+                text = (node.get("text") or "").lower()
+                desc = (node.get("desc") or "").lower()
+                if exp_lower in text or exp_lower in desc:
+                    found = True
+                    break
+            
+            if not found:
+                return VerificationResult(
+                    verified=False,
+                    confidence=0.9,
+                    reason=f"Expected element '{exp_elem}' not found in screen nodes.",
+                    screen_transition_detected=True
+                )
+                
+        # 3. Verify Disappearance (element_not_present)
+        not_exp_elem = expected.get("element_not_present")
+        if not_exp_elem:
+            not_exp_lower = not_exp_elem.lower()
+            for node in visible_nodes:
+                text = (node.get("text") or "").lower()
+                desc = (node.get("desc") or "").lower()
+                if not_exp_lower in text or not_exp_lower in desc:
+                    return VerificationResult(
+                        verified=False,
+                        confidence=0.9,
+                        reason=f"Element '{not_exp_elem}' was expected to disappear but is still visible.",
+                        screen_transition_detected=True
+                    )
+        
+        return VerificationResult(
+            verified=True,
+            confidence=0.95,
+            reason="All explicitly expected semantic outcomes matched successfully.",
+            screen_transition_detected=True
+        )
+
     def verify_action(
         self,
         pre_state: AndroidScreenState,

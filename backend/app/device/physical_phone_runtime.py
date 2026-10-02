@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from typing import Dict, Any, Optional
 from .gateway import device_gateway
+from .verification_engine import task_verification_engine
 
 class PhysicalPhoneRuntime:
     """
@@ -11,6 +12,7 @@ class PhysicalPhoneRuntime:
     
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
+        self._last_fingerprint = None
 
     async def _execute_remote(self, action: Dict[str, Any], expected: Dict[str, Any] = None, task_id: str = None) -> Dict[str, Any]:
         """Dispatches commands via the WSS protocol to the authenticated device."""
@@ -29,10 +31,25 @@ class PhysicalPhoneRuntime:
             expected=expected
         )
         
-        status = result.get("status", "FAILED")
+        # Phase G: Closed-loop semantic verification
+        verification = task_verification_engine.verify_wss_result(
+            result=result,
+            expected=expected,
+            pre_fingerprint=self._last_fingerprint
+        )
+        
+        # Update last known state for next fast-path check
+        self._last_fingerprint = result.get("screen_fingerprint")
+        
+        # Fallback to checking if action entirely failed on device
+        if result.get("status") == "FAILED":
+            verification.verified = False
+            verification.reason = result.get("reason", "Device execution failed.")
+
         return {
-            "success": status == "VERIFIED",
-            "status": status,
+            "success": verification.verified,
+            "status": "VERIFIED" if verification.verified else "FAILED",
+            "reason": verification.reason,
             "observation": result.get("observation", {}),
             "screen_fingerprint": result.get("screen_fingerprint"),
             "raw_result": result
