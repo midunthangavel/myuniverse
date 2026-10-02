@@ -951,8 +951,15 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                     prompt=payload.get("prompt", ""),
                     screen_context=payload.get("screen_context")
                 )
-                async for event in orchestrator.process_task_stream(task_req):
-                    await websocket.send_json(event)
+                
+                async def run_the_task():
+                    try:
+                        async for event in orchestrator.process_task_stream(task_req):
+                            await websocket.send_json(event)
+                    except Exception as e:
+                        print(f"Task error: {e}")
+                
+                asyncio.create_task(run_the_task())
 
             elif msg_type == "CONFIRM_ACTION":
                 plan = payload.get("plan", {})

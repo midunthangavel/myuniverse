@@ -122,22 +122,23 @@ class VectorMemoryStore:
                 metadata={"category": "ROUTINE", "active": True}
             )
 
-    def get_or_create_app_collection(self, app_name: str):
-        """Returns or initializes a ChromaDB collection dedicated to a specific app."""
-        safe_name = f"synapse_app_{app_name.lower().replace('-', '_').replace(' ', '_')}"
+    def get_or_create_app_collection(self, app_name: str, tenant_id: str = "tenant_default"):
+        """Returns or initializes a ChromaDB collection dedicated to a specific app for a specific tenant."""
+        safe_name = f"app_{tenant_id.lower()}_{app_name.lower().replace('-', '_').replace(' ', '_')}"
+        safe_name = "".join(c for c in safe_name if c.isalnum() or c == "_")
         return self.client.get_or_create_collection(
             name=safe_name,
-            metadata={"app": app_name, "type": "app_specific_trajectory_memory"}
+            metadata={"app": app_name, "tenant": tenant_id, "type": "app_specific_trajectory_memory"}
         )
 
-    def add_app_memory(self, app_name: str, doc_id: str, text: str, metadata: Dict[str, Any] = None):
-        col = self.get_or_create_app_collection(app_name)
+    def add_app_memory(self, app_name: str, doc_id: str, text: str, metadata: Dict[str, Any] = None, tenant_id: str = "tenant_default"):
+        col = self.get_or_create_app_collection(app_name, tenant_id)
         meta = metadata or {}
         cleaned_meta = {k: str(v) if not isinstance(v, (str, int, float, bool)) else v for k, v in meta.items()}
         col.upsert(ids=[doc_id], documents=[text], metadatas=[cleaned_meta])
 
-    def search_app_memory(self, app_name: str, query: str, n_results: int = 3) -> List[Dict[str, Any]]:
-        col = self.get_or_create_app_collection(app_name)
+    def search_app_memory(self, app_name: str, query: str, n_results: int = 3, tenant_id: str = "tenant_default") -> List[Dict[str, Any]]:
+        col = self.get_or_create_app_collection(app_name, tenant_id)
         total = col.count()
         if total == 0:
             return []

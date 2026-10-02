@@ -172,6 +172,42 @@ class TaskVerificationEngine:
                         reason=f"Element '{not_exp_elem}' was expected to disappear but is still visible.",
                         screen_transition_detected=True
                     )
+        # 4. Verify specific node attributes
+        exp_node = expected.get("node_state")
+        if exp_node:
+            res_id = exp_node.get("resource_id")
+            exp_text = exp_node.get("text")
+            exp_enabled = exp_node.get("enabled")
+            
+            node_found = False
+            attr_matched = True
+            mismatch_reason = ""
+            
+            for node in visible_nodes:
+                if res_id and node.get("id") == res_id:
+                    node_found = True
+                    if exp_text is not None and node.get("text") != exp_text:
+                        attr_matched = False
+                        mismatch_reason = f"Node {res_id} text mismatch. Expected '{exp_text}', got '{node.get('text')}'."
+                    elif exp_enabled is not None and node.get("enabled") != exp_enabled:
+                        attr_matched = False
+                        mismatch_reason = f"Node {res_id} state mismatch."
+                    break
+                    
+            if res_id and not node_found:
+                return VerificationResult(
+                    verified=False,
+                    confidence=0.9,
+                    reason=f"Expected node with resource_id '{res_id}' not found.",
+                    screen_transition_detected=True
+                )
+            elif res_id and not attr_matched:
+                return VerificationResult(
+                    verified=False,
+                    confidence=0.9,
+                    reason=mismatch_reason,
+                    screen_transition_detected=True
+                )
         
         return VerificationResult(
             verified=True,

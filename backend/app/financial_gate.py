@@ -15,10 +15,7 @@ from typing import Dict, Any, List, Optional
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "synapse_memory.db")
 SECRET_KEY_STR = os.getenv("SYNAPSE_GOVERNANCE_SECRET")
 if not SECRET_KEY_STR or SECRET_KEY_STR == "synapse-hmac-secure-token-gate-key-2026":
-    # In a real production environment, this would raise an error.
-    # For this transition, we'll log loudly but still allow it so as not to break the dev environment entirely.
-    print("WARNING: Using default or empty SYNAPSE_GOVERNANCE_SECRET. DO NOT USE IN PRODUCTION.")
-    SECRET_KEY_STR = "synapse-hmac-secure-token-gate-key-2026"
+    raise RuntimeError("CRITICAL SECURITY ERROR: SYNAPSE_GOVERNANCE_SECRET must be set for production governance!")
 SECRET_KEY = SECRET_KEY_STR.encode()
 
 class ApprovalTokenManager:
@@ -44,21 +41,6 @@ class ApprovalTokenManager:
         conn.commit()
         conn.close()
 
-    def _is_consumed(self, token_str: str) -> bool:
-        conn = self._get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM used_tokens WHERE token = ?", (token_str,))
-        exists = cur.fetchone() is not None
-        conn.close()
-        return exists
-
-    def _consume_token(self, token_str: str):
-        conn = self._get_connection()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO used_tokens (token, consumed_at) VALUES (?, ?)", (token_str, time.time()))
-        conn.commit()
-        conn.close()
-
     def generate_token(self, task_id: str, action: str, amount: str, user_id: str = "user_default") -> Dict[str, Any]:
         issued_at = int(time.time())
         expires_at = issued_at + self.ttl_seconds
@@ -78,9 +60,6 @@ class ApprovalTokenManager:
         }
 
     def verify_token(self, token_str: str, expected_task_id: str, expected_user_id: str, expected_action: str, expected_amount: str) -> Dict[str, Any]:
-        if self._is_consumed(token_str):
-            return {"valid": False, "reason": "TOKEN_ALREADY_USED"}
-
         parts = token_str.split("_")
         if len(parts) < 3 or not parts[1].isdigit():
             return {"valid": False, "reason": "MALFORMED_TOKEN"}
@@ -99,8 +78,17 @@ class ApprovalTokenManager:
         if not hmac.compare_digest(token_str, expected_token):
             return {"valid": False, "reason": "INVALID_SIGNATURE"}
 
-        # Consume token
-        self._consume_token(token_str)
+        # Atomic consume token
+        conn = self._get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("INSERT INTO used_tokens (token, consumed_at) VALUES (?, ?)", (token_str, time.time()))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.close()
+            return {"valid": False, "reason": "TOKEN_ALREADY_USED"}
+            
+        conn.close()
         return {"valid": True, "task_id": expected_task_id, "timestamp": now}
 
 

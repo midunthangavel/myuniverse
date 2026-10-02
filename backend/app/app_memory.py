@@ -99,18 +99,23 @@ class AppSpecificMemory:
 
     def __init__(self, vector_store: Optional[VectorMemoryStore] = None):
         self.vector_store = vector_store or VectorMemoryStore()
-        self.shortcuts: Dict[str, List[Dict[str, Any]]] = dict(self.BASELINE_SHORTCUTS)
-        self._seed_baseline_trajectories()
+        # shortcuts now keyed by: { tenant_id: { app_name: [...] } }
+        self.shortcuts: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        self._seed_baseline_trajectories(tenant_id="tenant_default")
 
-    def _seed_baseline_trajectories(self):
+    def _seed_baseline_trajectories(self, tenant_id: str = "tenant_default"):
         """Seeds baseline shortcuts into ChromaDB app collections."""
         try:
-            for app, sc_list in self.shortcuts.items():
+            if tenant_id not in self.shortcuts:
+                self.shortcuts[tenant_id] = dict(self.BASELINE_SHORTCUTS)
+                
+            for app, sc_list in self.shortcuts[tenant_id].items():
                 for sc in sc_list:
                     steps_str = " -> ".join([f"{s['action']}({s.get('target', '')})" for s in sc["steps"]])
                     doc_text = f"Task: {sc['task']} | Workflow: {steps_str}"
                     self.vector_store.add_app_memory(
                         app_name=app,
+                        tenant_id=tenant_id,
                         doc_id=sc["shortcut_id"],
                         text=doc_text,
                         metadata={
@@ -128,7 +133,8 @@ class AppSpecificMemory:
         app: str,
         task: str,
         steps: List[Dict[str, Any]],
-        confidence: float = 0.95
+        confidence: float = 0.95,
+        tenant_id: str = "tenant_default"
     ) -> str:
         """Stores verified successful execution trajectory for future RAG recall."""
         app_key = app.lower().replace("-", "_").replace(" ", "_")
@@ -137,10 +143,13 @@ class AppSpecificMemory:
         doc_text = f"Task: {task} | Flow: {steps_str}"
 
         # 1. Update in-memory shortcuts
-        if app_key not in self.shortcuts:
-            self.shortcuts[app_key] = []
+        if tenant_id not in self.shortcuts:
+            self.shortcuts[tenant_id] = dict(self.BASELINE_SHORTCUTS)
+            
+        if app_key not in self.shortcuts[tenant_id]:
+            self.shortcuts[tenant_id][app_key] = []
         
-        self.shortcuts[app_key].append({
+        self.shortcuts[tenant_id][app_key].append({
             "shortcut_id": doc_id,
             "task": task,
             "steps": steps,
@@ -151,6 +160,7 @@ class AppSpecificMemory:
         # 2. Add to ChromaDB App Collection
         self.vector_store.add_app_memory(
             app_name=app_key,
+            tenant_id=tenant_id,
             doc_id=doc_id,
             text=doc_text,
             metadata={
@@ -162,14 +172,17 @@ class AppSpecificMemory:
         )
         return doc_id
 
-    def retrieve_similar_task(self, app: str, task_description: str, n_results: int = 3) -> List[Dict[str, Any]]:
+    def retrieve_similar_task(self, app: str, task_description: str, n_results: int = 3, tenant_id: str = "tenant_default") -> List[Dict[str, Any]]:
         """Vector similarity search against past successful executions in this specific app."""
         app_key = app.lower().replace("-", "_").replace(" ", "_")
-        matches = self.vector_store.search_app_memory(app_key, task_description, n_results=n_results)
+        matches = self.vector_store.search_app_memory(app_key, task_description, n_results=n_results, tenant_id=tenant_id)
         
+        if tenant_id not in self.shortcuts:
+            self.shortcuts[tenant_id] = dict(self.BASELINE_SHORTCUTS)
+            
         # Fallback to local shortcut list if vector search returns empty
-        if not matches and app_key in self.shortcuts:
-            for sc in self.shortcuts[app_key]:
+        if not matches and app_key in self.shortcuts[tenant_id]:
+            for sc in self.shortcuts[tenant_id][app_key]:
                 if any(w in sc["task"].lower() for w in task_description.lower().split()):
                     matches.append({
                         "text": f"Task: {sc['task']}",
@@ -179,10 +192,12 @@ class AppSpecificMemory:
                     })
         return matches
 
-    def get_app_shortcuts(self, app: str) -> List[Dict[str, Any]]:
+    def get_app_shortcuts(self, app: str, tenant_id: str = "tenant_default") -> List[Dict[str, Any]]:
         """Retrieves verified shortcuts for given application."""
+        if tenant_id not in self.shortcuts:
+            self.shortcuts[tenant_id] = dict(self.BASELINE_SHORTCUTS)
         app_key = app.lower().replace("-", "_").replace(" ", "_")
-        return self.shortcuts.get(app_key, [])
+        return self.shortcuts[tenant_id].get(app_key, [])
 
     def list_supported_apps(self) -> List[str]:
         return sorted(list(self.shortcuts.keys()))

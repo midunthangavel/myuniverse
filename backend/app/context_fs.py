@@ -159,12 +159,12 @@ class OpenVikingContextFS:
             }
         )
 
-    def _resolve_path(self, uri: str) -> List[str]:
+    def _resolve_path(self, uri: str, tenant_id: str = "tenant_default") -> List[str]:
         cleaned = uri.replace("viking://", "").strip("/")
-        return [p for p in cleaned.split("/") if p]
+        return [tenant_id] + [p for p in cleaned.split("/") if p]
 
-    def mkdir(self, uri: str) -> VikingNode:
-        parts = self._resolve_path(uri)
+    def mkdir(self, uri: str, tenant_id: str = "tenant_default") -> VikingNode:
+        parts = self._resolve_path(uri, tenant_id)
         current = self.root
         path_acc = "viking://"
         for part in parts:
@@ -174,8 +174,8 @@ class OpenVikingContextFS:
             current = current.children[part]
         return current
 
-    def write(self, uri: str, l0: str = "", l1: str = "", l2: Any = None) -> VikingNode:
-        parts = self._resolve_path(uri)
+    def write(self, uri: str, l0: str = "", l1: str = "", l2: Any = None, tenant_id: str = "tenant_default") -> VikingNode:
+        parts = self._resolve_path(uri, tenant_id)
         dir_parts = parts[:-1]
         file_name = parts[-1]
 
@@ -193,10 +193,12 @@ class OpenVikingContextFS:
         current.children[file_name] = node
         return node
 
-    def get_node(self, uri: str) -> Optional[VikingNode]:
+    def get_node(self, uri: str, tenant_id: str = "tenant_default") -> Optional[VikingNode]:
         if uri in ["viking://", "viking:/", "viking:"]:
-            return self.root
-        parts = self._resolve_path(uri)
+            # Returns the tenant's root
+            return self.get_node(f"viking://{tenant_id}", tenant_id="system") if tenant_id != "system" else self.root
+            
+        parts = self._resolve_path(uri, tenant_id)
         current = self.root
         for part in parts:
             if part not in current.children:
@@ -204,12 +206,12 @@ class OpenVikingContextFS:
             current = current.children[part]
         return current
 
-    def read(self, uri: str, tier: str = "L1") -> Dict[str, Any]:
+    def read(self, uri: str, tier: str = "L1", tenant_id: str = "tenant_default") -> Dict[str, Any]:
         """
         Reads a node at the specified progressive disclosure level (L0, L1, or L2).
         Returns metadata, tier requested, and the actual content.
         """
-        node = self.get_node(uri)
+        node = self.get_node(uri, tenant_id)
         if not node:
             return {"error": f"URI '{uri}' not found in viking:// context database", "success": False}
 
@@ -233,9 +235,9 @@ class OpenVikingContextFS:
             "success": True
         }
 
-    def ls(self, uri: str = "viking://") -> List[Dict[str, Any]]:
+    def ls(self, uri: str = "viking://", tenant_id: str = "tenant_default") -> List[Dict[str, Any]]:
         """Lists directory entries with L0 abstracts."""
-        node = self.get_node(uri)
+        node = self.get_node(uri, tenant_id)
         if not node:
             return []
         if not node.is_dir:
@@ -251,9 +253,9 @@ class OpenVikingContextFS:
             })
         return sorted(results, key=lambda x: (not x["is_dir"], x["name"]))
 
-    def tree(self, uri: str = "viking://", depth: int = 3) -> Dict[str, Any]:
+    def tree(self, uri: str = "viking://", depth: int = 3, tenant_id: str = "tenant_default") -> Dict[str, Any]:
         """Returns visual tree structure of the context database."""
-        node = self.get_node(uri)
+        node = self.get_node(uri, tenant_id)
         if not node:
             return {"error": f"URI '{uri}' not found"}
         return node.to_dict(depth=depth)

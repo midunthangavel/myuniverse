@@ -126,14 +126,14 @@ class AgentOrchestrator:
         viking_loaded_nodes = []
         total_tokens_loaded = 0
         for uri in sys1_result["viking_preload"]:
-            res = self.viking_fs.read(uri, tier="L1")
+            res = self.viking_fs.read(uri, tier="L1", tenant_id=user_id)
             if res.get("success"):
                 viking_loaded_nodes.append(res)
                 total_tokens_loaded += res.get("estimated_tokens", 0)
 
         # If empty, load default user profile
         if not viking_loaded_nodes:
-            profile_res = self.viking_fs.read("viking://user/profile.md", tier="L1")
+            profile_res = self.viking_fs.read("viking://user/profile.md", tier="L1", tenant_id=user_id)
             viking_loaded_nodes.append(profile_res)
             total_tokens_loaded += profile_res.get("estimated_tokens", 0)
 
@@ -212,7 +212,7 @@ class AgentOrchestrator:
             semantic_matches = [{"text": m["text"], "type": m["type"]} for m in raw_sqlite]
 
         # App-Specific RAG Memory Recall (Module 2.3)
-        app_rag_shortcuts = self.app_memory.retrieve_similar_task(active_app, user_prompt)
+        app_rag_shortcuts = self.app_memory.retrieve_similar_task(active_app, user_prompt, tenant_id=user_id)
         if app_rag_shortcuts:
             for s in app_rag_shortcuts:
                 semantic_matches.append({"text": f"Known App Trajectory: {s.get('text', '')}", "type": "APP_SHORTCUT"})
@@ -298,11 +298,12 @@ class AgentOrchestrator:
             }
             await asyncio.sleep(0.3)
 
-            # Module 2.1: Dynamic Closed-Loop Execution (Observer -> Grounder -> Executor -> Verifier)
+            # Module 2.1: Dynamic Closed-Loop Execution
             max_steps = 10
             executed_trajectory = []
             
-            from .device.action_engine import android_action_engine
+            from .device.physical_phone_runtime import PhysicalPhoneRuntime
+            physical_runtime = PhysicalPhoneRuntime(tenant_id=user_id)
             
             steps_list = plan.get("steps", [])
             task_success = True
@@ -317,24 +318,36 @@ class AgentOrchestrator:
                 if action_name in ["DONE", "EXPLAIN_RESULT"]:
                     break
 
-                # Execute using the true Action Engine (handles Observe -> Ground -> Execute -> Verify loop)
-                exec_result = await android_action_engine.execute_semantic_action(
-                    action=action_name,
-                    target=target,
-                    value=step.get("text", step.get("value", step.get("target", "")))
-                )
+                # Execute using WSS PhysicalPhoneRuntime
+                expected_outcome = {
+                    "foreground_package": step.get("expected_package", ""),
+                    "element_present": step.get("expected_element", "")
+                }
+                
+                if action_name == "TAP":
+                    exec_result = await physical_runtime.tap(resource_id=target, expected=expected_outcome)
+                elif action_name in ["TYPE", "INPUT_TEXT"]:
+                    exec_result = await physical_runtime.type(resource_id=target, text=step.get("text", step.get("value", "")), expected=expected_outcome)
+                elif action_name == "SWIPE":
+                    exec_result = await physical_runtime.swipe(direction="UP", expected=expected_outcome)
+                elif action_name in ["GLOBAL_ACTION", "NAVIGATE", "PRESS_BACK", "PRESS_HOME"]:
+                    exec_result = await physical_runtime.global_action(action_name=target or action_name, expected=expected_outcome)
+                else:
+                    exec_result = await physical_runtime.observe()
 
-                if exec_result.success:
+                success = exec_result.get("success", False)
+
+                if success:
                     reflection = {
                         "status": "SUCCESS",
                         "strategy": "CONTINUE",
-                        "reasoning": "Action executed and verified via visual diff."
+                        "reasoning": "Action executed and semantically verified."
                     }
                 else:
                     reflection = {
                         "status": "FAILED",
                         "strategy": "ESCALATE_TO_USER",
-                        "reasoning": exec_result.error or "Verification failed after recovery attempts."
+                        "reasoning": exec_result.get("reason", "Verification failed after execution.")
                     }
                     task_success = False
 
@@ -384,7 +397,8 @@ class AgentOrchestrator:
                 self.app_memory.record_successful_trajectory(
                     app=active_app,
                     task=user_prompt,
-                    steps=steps_list
+                    steps=steps_list,
+                    tenant_id=user_id
                 )
 
                 # Reinforce personal habit in flywheel & QwenPaw ReMe Layer 3

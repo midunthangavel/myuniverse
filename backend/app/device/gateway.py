@@ -54,18 +54,17 @@ class DeviceGateway:
     def __init__(self):
         self.sessions: Dict[str, DeviceSession] = {}
         self.tenant_devices: Dict[str, set] = {}
+        
+        # Simulated production device registry
+        self.device_registry = {
+            "prod_token_xyz_2026": {"device_id": "nexus_001", "tenant_id": "tenant_default"}
+        }
 
     def authenticate_device(self, token: str) -> Optional[Dict[str, str]]:
-        # In a real system, verify cryptographic enrollment token.
-        # For now, we simulate finding the device & tenant identity.
-        if not token or len(token) < 10:
+        """Authenticates a device against the known registry using its secure enrollment credential."""
+        if not token:
             return None
-            
-        # Mock derivation of identity from secure token
-        return {
-            "device_id": f"dev_{token[:8]}",
-            "tenant_id": f"tenant_{token[-8:]}"
-        }
+        return self.device_registry.get(token)
 
     async def connect(self, websocket: WebSocket, device_id: str, tenant_id: str) -> DeviceSession:
         await websocket.accept()

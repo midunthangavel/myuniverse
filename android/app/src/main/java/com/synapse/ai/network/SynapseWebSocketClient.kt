@@ -11,11 +11,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import android.os.Handler
+import android.os.Looper
 
 class SynapseWebSocketClient(
     private val context: Context,
-    private val serverUrl: String = "ws://10.0.2.2:8000/ws/agent" // 10.0.2.2 is host loopback in Android Emulator
+    private val serverUrl: String = "ws://localhost:8000/ws/agent?token=prod_token_xyz_2026"
 ) {
     companion object {
         private const val TAG = "SynapseWS"
@@ -118,6 +121,7 @@ class SynapseWebSocketClient(
         val resourceId = target?.optString("resource_id")
         
         var success = false
+        val handler = Handler(Looper.getMainLooper())
 
         when (actionType) {
             "TAP" -> {
@@ -125,7 +129,7 @@ class SynapseWebSocketClient(
                     val node = accessibility.findNodeById(resourceId)
                     if (node != null) {
                         accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
-                            sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
+                            handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
                         }
                         return
                     }
@@ -138,7 +142,7 @@ class SynapseWebSocketClient(
                      if (node != null) {
                          accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
                              accessibility.performSetText(text)
-                             sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
+                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
                          }
                          return
                      }
@@ -147,9 +151,13 @@ class SynapseWebSocketClient(
             "SWIPE" -> {
                  val dir = action.optString("direction", "UP")
                  if (dir == "UP") {
-                     accessibility.performSwipe(500f, 1500f, 500f, 500f) { _ -> sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }
+                     accessibility.performSwipe(500f, 1500f, 500f, 500f) { _ -> 
+                         handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500) 
+                     }
                  } else {
-                     accessibility.performSwipe(500f, 500f, 500f, 1500f) { _ -> sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }
+                     accessibility.performSwipe(500f, 500f, 500f, 1500f) { _ -> 
+                         handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500) 
+                     }
                  }
                  return
             }
@@ -160,7 +168,7 @@ class SynapseWebSocketClient(
                      "HOME" -> success = accessibility.performHome()
                      "RECENTS" -> success = accessibility.performRecents()
                  }
-                 sendCommandResult(taskId, commandId, sequence, if (success) "VERIFIED" else "FAILED", accessibility)
+                 handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, if (success) "VERIFIED" else "FAILED", accessibility) }, 1500)
                  return
             }
             "OBSERVE_ONLY" -> {
@@ -177,10 +185,23 @@ class SynapseWebSocketClient(
     private fun sendCommandResult(taskId: String, commandId: String, sequence: Int, status: String, accessibility: SynapseAccessibilityService) {
         val screenNodes = accessibility.dumpScreenHierarchy()
         val jsonNodes = JSONArray()
-        screenNodes.forEach { jsonNodes.put(it.toJson()) }
+        val sb = StringBuilder()
         
         val fgPackage = screenNodes.firstOrNull()?.packageName ?: "unknown"
-        val fingerprint = "fg_${fgPackage}_nodes_${screenNodes.size}"
+        sb.append(fgPackage).append("|")
+        
+        screenNodes.forEach { 
+            jsonNodes.put(it.toJson()) 
+            sb.append(it.id).append(":")
+              .append(it.text).append(":")
+              .append(it.contentDescription).append(":")
+              .append(it.className).append(":")
+              .append(it.isClickable).append(":")
+              .append(it.bounds.toShortString()).append(";")
+        }
+        
+        val bytes = MessageDigest.getInstance("SHA-256").digest(sb.toString().toByteArray())
+        val fingerprint = bytes.joinToString("") { "%02x".format(it) }
 
         val payload = JSONObject().apply {
             put("type", "COMMAND_RESULT")
