@@ -367,17 +367,17 @@ class AgentOrchestrator:
                     "type": "LOG_STEP",
                     "step": "ACTION_LOOP",
                     "title": f"Closed-Loop Execute: Step {step_idx+1}/{len(steps_list)}",
-                    "description": f"Action: {action_name} -> {target}. Verified: {exec_result.success}",
+                    "description": f"Action: {action_name} -> {target}. Verified: {exec_result.get('success')}",
                     "payload": {
                         "step_index": step_idx,
                         "action": step,
                         "reflection": reflection,
                         "progress": progress_info,
-                        "execution_result": exec_result.to_dict() if hasattr(exec_result, 'to_dict') else None
+                        "execution_result": exec_result
                     }
                 }
 
-                if not exec_result.success:
+                if not exec_result.get("success"):
                     yield {
                         "type": "CHARACTER_STATE",
                         "state": "ERROR",
