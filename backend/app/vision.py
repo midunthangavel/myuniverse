@@ -10,6 +10,9 @@ Implements:
 import io
 import re
 import base64
+import os
+import json
+import httpx
 from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
 
@@ -50,6 +53,33 @@ class ScreenElement:
 class CloudScreenPerceptionEngine:
     def __init__(self):
         self.last_screen_state: Optional[Dict[str, Any]] = None
+        self.vision_api_url = os.getenv("VISION_API_URL", "http://127.0.0.1:8001/parse_screen")
+        self.vision_api_key = os.getenv("VISION_API_KEY", "")
+
+    async def _extract_visual_elements(self, image_base64: str) -> List[Dict[str, Any]]:
+        """
+        Calls a real Vision API (e.g., OmniParser, PaddleOCR microservice, or VLM)
+        to extract bounding boxes, text, and interactive elements from pixels.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = {"Content-Type": "application/json"}
+                if self.vision_api_key:
+                    headers["Authorization"] = f"Bearer {self.vision_api_key}"
+                
+                payload = {"image_base64": image_base64}
+                response = await client.post(self.vision_api_url, json=payload, headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    # Expecting data format: {"elements": [{"text": "...", "bounds": [x1, y1, x2, y2], "type": "button", "confidence": 0.9}]}
+                    return data.get("elements", [])
+                else:
+                    print(f"[Vision Engine] API Error {response.status_code}: {response.text}")
+                    return []
+        except Exception as e:
+            print(f"[Vision Engine] Failed to reach Vision API: {e}")
+            return []
 
     def parse_screen(
         self,
@@ -65,37 +95,79 @@ class CloudScreenPerceptionEngine:
         detected_elements: List[ScreenElement] = []
         ocr_blocks: List[Dict[str, Any]] = []
 
-        # If accessibility nodes provided from phone bridge, ingest and ground them
+        # If accessibility nodes provided from phone bridge, ingest them
         if accessibility_nodes:
             for idx, node in enumerate(accessibility_nodes):
                 elem_id = node.get("id", f"node_{idx}")
-                label = node.get("text", "") or node.get("label", "") or elem_id
-                role = node.get("role", "button")
-                bounds = node.get("bounds", {"x": 50.0 + (idx % 3) * 100, "y": 80.0 + idx * 45, "width": 80, "height": 36})
+                label = node.get("text", "") or node.get("content_desc", "") or node.get("label", "") or elem_id
+                role = node.get("class", "button").split(".")[-1]
+                bounds = node.get("bounds", [0, 0, 0, 0])
                 clickable = node.get("clickable", True)
                 
+                # Filter out invisible or layout-only nodes
+                if not label and not clickable:
+                    continue
+
                 elem = ScreenElement(
                     element_id=elem_id,
                     label=label,
                     role=role,
                     bounds=bounds,
                     clickable=clickable,
-                    confidence=0.98
+                    confidence=1.0 # Native OS nodes have 100% confidence
                 )
                 detected_elements.append(elem)
 
-                # Generate OCR text block
+                # Generate OCR text block equivalent
                 if label:
                     ocr_blocks.append({
                         "text": label,
                         "bounds": bounds,
-                        "confidence": "98.5%",
-                        "engine": "Cloud-PaddleOCR-Compatible"
+                        "confidence": "100.0%",
+                        "engine": "Android Native UIAutomator"
                     })
 
-        # Synthesize fallback UI components if screen was empty
+        # If we have a screenshot, run it through the Vision/OCR API
+        if image_base64:
+            # We would typically await this, but parse_screen is synchronous in the current interface.
+            # In a full refactor, parse_screen should be async. For now, we simulate the fusion.
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                visual_elements = loop.run_until_complete(self._extract_visual_elements(image_base64))
+            except Exception:
+                visual_elements = []
+
+            for v_elem in visual_elements:
+                v_text = v_elem.get("text", "")
+                v_bounds = v_elem.get("bounds", [0, 0, 0, 0])
+                
+                # Deduplication: Check if this visual element overlaps heavily with a native node
+                is_duplicate = False
+                for existing in detected_elements:
+                    if existing.label == v_text or self._bounds_overlap(existing.bounds, v_bounds):
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    detected_elements.append(ScreenElement(
+                        element_id=f"vis_{len(detected_elements)}",
+                        label=v_text,
+                        role=v_elem.get("type", "visual_element"),
+                        bounds=v_bounds,
+                        clickable=True, # Assume visual elements are interactive candidates
+                        confidence=v_elem.get("confidence", 0.8)
+                    ))
+                    if v_text:
+                        ocr_blocks.append({
+                            "text": v_text,
+                            "bounds": v_bounds,
+                            "confidence": f"{v_elem.get('confidence', 0.8)*100}%",
+                            "engine": "Cloud Vision VLM"
+                        })
+
         if not detected_elements:
-            detected_elements = self._synthesize_default_ui(active_app)
+            print("[Vision Engine] Warning: Screen is empty. No UIAutomator nodes and no visual elements extracted.")
 
         screen_representation = {
             "active_app": active_app,
@@ -116,10 +188,12 @@ class CloudScreenPerceptionEngine:
 
     def ground_instruction(self, instruction: str, screen_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        UGround-Style Visual Grounding:
+        UGround-Style Visual Grounding (Upgraded):
         Maps user natural language instruction to precise target (x, y) coordinates
-        and target element ID.
+        using fuzzy string matching, semantic role aliasing, and geometric clustering.
         """
+        import difflib
+        
         state = screen_state or self.last_screen_state
         elements_raw = (state.get("ui_elements") or state.get("elements") or state.get("nodes") or []) if state else []
         if not state or not elements_raw:
@@ -141,7 +215,22 @@ class CloudScreenPerceptionEngine:
 
         inst_lower = instruction.lower()
 
-        # Score elements based on label, role, and keyword overlap
+        # Concept aliases map abstract instructions to likely UI labels/icons
+        aliases = {
+            "back": ["back", "navigate up", "return", "previous", "←"],
+            "home": ["home", "dashboard", "main"],
+            "search": ["search", "find", "magnifying glass", "query", "look for"],
+            "confirm": ["ok", "confirm", "yes", "accept", "submit", "done", "next", "continue", "=", "calculate"],
+            "cancel": ["cancel", "no", "close", "abort", "x", "clear", "c"],
+            "menu": ["menu", "more options", "hamburger", "settings", "≡", "⋮"]
+        }
+
+        # Expand instruction with aliases to catch synonyms
+        search_terms = [inst_lower]
+        for key, synonyms in aliases.items():
+            if key in inst_lower:
+                search_terms.extend(synonyms)
+
         best_match = None
         highest_score = -1.0
 
@@ -151,21 +240,36 @@ class CloudScreenPerceptionEngine:
             role = str(elem.get("role") or elem.get("class_name") or "").lower()
             elem_id = str(elem.get("id") or elem.get("resource_id") or "").lower()
 
-            # Exact phrase match
-            if label and label in inst_lower:
-                score += 5.0
+            if not label and not role and not elem_id:
+                continue
 
-            # Keyword matches
+            # 1. Fuzzy Text Matching (handles OCR typos and partial labels)
+            max_fuzzy = 0.0
+            for term in search_terms:
+                if term in label:
+                    max_fuzzy = max(max_fuzzy, 0.85)
+                ratio = difflib.SequenceMatcher(None, term, label).ratio()
+                max_fuzzy = max(max_fuzzy, ratio)
+            
+            score += max_fuzzy * 4.0
+
+            # 2. Keyword exact matches in ID or Role
             for word in inst_lower.split():
                 if len(word) > 2:
-                    if word in label:
-                        score += 2.0
                     if word in elem_id:
                         score += 1.5
                     if word in role:
                         score += 1.0
 
-            # Boost if element is clickable
+            # 3. Role Semantic Alignment
+            if "button" in role or "imagebutton" in role or "clickable" in role:
+                if any(act in inst_lower for act in ["tap", "click", "press", "submit"]):
+                    score += 1.0
+            elif "edittext" in role or "input" in role or "search" in role:
+                if any(act in inst_lower for act in ["type", "enter", "input", "search"]):
+                    score += 1.5
+
+            # 4. Interactive Boost
             if elem.get("clickable", True):
                 score += 0.5
 
@@ -185,32 +289,25 @@ class CloudScreenPerceptionEngine:
                 return {"x": round(float(b.get("x", 0)) + float(b.get("width", 0)) / 2.0, 1), "y": round(float(b.get("y", 0)) + float(b.get("height", 0)) / 2.0, 1)}
             return {"x": 190.0, "y": 420.0}
 
-        if best_match and highest_score > 0.8:
+        if best_match and highest_score > 1.5:
             matched_id = best_match.get("id") or best_match.get("resource_id") or "target_element"
             matched_label = best_match.get("label") or best_match.get("text") or matched_id
+            center = _get_center(best_match)
             return {
                 "grounded": True,
                 "target_element_id": matched_id,
                 "target_label": matched_label,
                 "target_role": best_match.get("role", "button"),
-                "click_coordinates": _get_center(best_match),
+                "click_coordinates": [center["x"], center["y"]],
                 "bounding_box": best_match.get("bounds", {}),
-                "grounding_confidence": f"{min(99.4, round(85.0 + highest_score * 3, 1))}%",
-                "grounding_engine": "UGround Visual Coordinate Grounding"
+                "grounding_confidence": f"{min(99.9, round(highest_score * 15, 1))}%",
+                "grounding_engine": "UGround Semantic + Fuzzy Matrix"
             }
 
-        # Fallback to first interactive button
-        first_clickable = next((e for e in elements if e.get("clickable")), elements[0])
-        fallback_id = first_clickable.get("id") or first_clickable.get("resource_id") or "fallback_element"
-        fallback_label = first_clickable.get("label") or first_clickable.get("text") or fallback_id
         return {
-            "grounded": True,
-            "target_element_id": fallback_id,
-            "target_label": fallback_label,
-            "click_coordinates": _get_center(first_clickable),
-            "bounding_box": first_clickable.get("bounds", {}),
-            "grounding_confidence": "78.0% (Probabilistic Fallback)",
-            "grounding_engine": "UGround Visual Coordinate Grounding"
+            "grounded": False,
+            "reason": f"Grounding failed. No confident match found for '{instruction}'.",
+            "click_coordinates": None
         }
 
     def verify_action_result(self, before_state: Dict[str, Any], after_state: Dict[str, Any], expected_action: str) -> Dict[str, Any]:
@@ -240,20 +337,25 @@ class CloudScreenPerceptionEngine:
             "message": f"Verified action '{expected_action}' caused successful screen state transition." if verified else "Screen state unchanged."
         }
 
-    def _synthesize_default_ui(self, app_name: str) -> List[ScreenElement]:
-        if app_name == "cinema":
-            return [
-                ScreenElement("btn_showtime_830", "8:30 PM IMAX (Preferred)", "button", {"x": 90, "y": 240, "width": 110, "height": 38}),
-                ScreenElement("btn_book_seats", "Book 2 Seats ($36.00)", "button", {"x": 30, "y": 320, "width": 260, "height": 44}),
-                ScreenElement("txt_theater", "PVR INOX Palladium IMAX", "text", {"x": 30, "y": 180, "width": 200, "height": 28}, clickable=False)
-            ]
-        elif app_name == "food":
-            return [
-                ScreenElement("btn_order_biryani", "Reorder Usual: Veg Dum Biryani ($18.50)", "button", {"x": 30, "y": 220, "width": 240, "height": 40}),
-                ScreenElement("card_paradise", "Paradise Dum Biryani (Rating 4.8)", "card", {"x": 20, "y": 140, "width": 280, "height": 130})
-            ]
-        return [
-            ScreenElement("icon_cinema", "CinePass", "icon", {"x": 35, "y": 150, "width": 54, "height": 54}),
-            ScreenElement("icon_food", "BiteGo", "icon", {"x": 105, "y": 150, "width": 54, "height": 54}),
-            ScreenElement("icon_mail", "Spark Mail", "icon", {"x": 175, "y": 150, "width": 54, "height": 54})
-        ]
+    def _bounds_overlap(self, b1: Any, b2: Any, threshold=0.5) -> bool:
+        """Helper to compute bounding box overlap for deduplication."""
+        # Simplified overlap check for arrays [x1, y1, x2, y2]
+        if isinstance(b1, (list, tuple)) and isinstance(b2, (list, tuple)) and len(b1) == 4 and len(b2) == 4:
+            x_left = max(b1[0], b2[0])
+            y_top = max(b1[1], b2[1])
+            x_right = min(b1[2], b2[2])
+            y_bottom = min(b1[3], b2[3])
+
+            if x_right < x_left or y_bottom < y_top:
+                return False
+
+            intersection_area = (x_right - x_left) * (y_bottom - y_top)
+            area1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
+            area2 = (b2[2] - b2[0]) * (b2[3] - b2[1])
+            
+            if area1 == 0 or area2 == 0:
+                return False
+
+            iou = intersection_area / float(area1 + area2 - intersection_area)
+            return iou > threshold
+        return False

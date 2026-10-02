@@ -150,6 +150,24 @@ class BuiltinLocalProvider(BaseLLMProvider):
                 ]
             }
 
+        if any(w in p for w in ["calculator", "add", "math", "+"]):
+            return {
+                "intent": "calculate",
+                "domain": "productivity",
+                "confidence": "99.0%",
+                "provider_used": "builtin",
+                "summary": "Calculate math expression",
+                "cost": "$0.00",
+                "steps": [
+                    {"action": "TAP", "target": "Calculator", "desc": "Launch Calculator App"},
+                    {"action": "TAP", "target": "2", "desc": "Tap 2"},
+                    {"action": "TAP", "target": "plus", "desc": "Tap plus"},
+                    {"action": "TAP", "target": "2", "desc": "Tap 2"},
+                    {"action": "TAP", "target": "equals", "desc": "Tap equals"},
+                    {"action": "EXPLAIN_RESULT", "desc": "Math calculation complete"}
+                ]
+            }
+
         return {
             "intent": "general_inquiry",
             "domain": "assistant",

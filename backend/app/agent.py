@@ -298,28 +298,110 @@ class AgentOrchestrator:
             }
             await asyncio.sleep(0.3)
 
-            # Module 2.1: Hierarchical Reflection Loop (Planner -> Operator -> Reflector -> Progressor)
-            steps_list = plan.get("steps", [first_action])
-            task_rec = self.progressor.start_task(
-                task_id=task_id,
-                goal=plan.get("summary", user_prompt),
-                steps=steps_list,
-                app_name=active_app
-            )
-
+            # Module 2.1: Dynamic Closed-Loop Execution
+            max_steps = 10
             executed_trajectory = []
-            for idx, step in enumerate(steps_list):
-                before_state = {"app": active_app, "title": screen_title, "nodes": active_screen_nodes}
-                tool_result = self._execute_plan_tools(plan, request.screen_context)
-                after_state = {"app": active_app, "title": f"{screen_title} (Step {idx+1})", "nodes": active_screen_nodes}
+            
+            # Try to load local ADB Bridge for true autonomous loop observation
+            adb = None
+            try:
+                import sys
+                import os
+                bridge_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+                if bridge_path not in sys.path:
+                    sys.path.append(bridge_path)
+                from android.bridge.adb_bridge import ADBBridge
+                adb = ADBBridge()
+                adb.select_device()
+            except Exception as e:
+                print(f"[Agent] ADB Bridge not available: {e}")
 
-                # Action Reflector Evaluation
+            # True Closed Loop: Observe -> Plan (1 step) -> Act -> Verify
+            for step_idx in range(max_steps):
+                # 1. OBSERVE (Fresh state)
+                if adb and adb.device_id:
+                    active_screen_nodes = adb.dump_ui_nodes()
+                    screenshot = adb.capture_screenshot_base64()
+                    parsed_screen = self.vision.parse_screen(
+                        accessibility_nodes=active_screen_nodes,
+                        active_app=active_app,
+                        screen_title=screen_title,
+                        image_base64=screenshot
+                    )
+                
+                # 2. PLAN (If not the first step, replan based on new state)
+                if step_idx > 0:
+                    plan = await self.local_llm.plan_task(
+                        user_prompt, 
+                        semantic_matches, 
+                        {"visible_nodes": active_screen_nodes, "title": screen_title}
+                    )
+                
+                steps_list = plan.get("steps", [])
+                if not steps_list:
+                    break
+                    
+                # Take ONLY the immediate next logical step
+                step = steps_list[0] 
+                action_name = step.get("action", "ACT").upper()
+                
+                if action_name in ["DONE", "EXPLAIN_RESULT"]:
+                    break
+
+                before_state = {"app": active_app, "title": screen_title, "nodes": active_screen_nodes}
+                
+                # 3. ACT
+                tool_result = self._execute_plan_tools({"intent": plan.get("intent"), "steps": [step]}, request.screen_context)
+                
+                if adb and adb.device_id:
+                     print(f"[Agent Debug] LLM Action: {action_name}, Target: {step.get('target', 'None')}")
+                     if action_name in ["TAP", "CLICK", "PRESS"]:
+                         target = step.get("target", "")
+                         coords = self.vision.ground_instruction(target, parsed_screen).get("click_coordinates", [0, 0])
+                         print(f"[Agent Debug] Computed coords for {target}: {coords}")
+                         if isinstance(coords, list) and len(coords) >= 2:
+                             adb.tap(coords[0], coords[1])
+                     elif action_name in ["TYPE", "INPUT"]:
+                         text = step.get("text", step.get("value", step.get("target", "")))
+                         print(f"[Agent Debug] Typing text: {text}")
+                         adb.type_text(text)
+                
+                # 4. OBSERVE & VERIFY
+                # (In a real implementation, we would fetch the state AGAIN here to verify)
+                after_state = {"app": active_app, "title": f"{screen_title} (Step {step_idx+1})", "nodes": active_screen_nodes}
                 reflection = self.reflector.reflect(before_state, after_state, step, active_app)
-                progress_info = self.progressor.update_step(task_id, idx, step.get("action", "ACT"), reflection)
+                
+                # --- PHASE 3: FALLBACK TREE & RECOVERY ---
+                if reflection["strategy"] == "RETRY_ADJUSTED":
+                    yield {
+                        "type": "LOG_STEP",
+                        "step": "FALLBACK_TREE",
+                        "title": "Fallback Tree Triggered",
+                        "description": "NOOP detected (tap missed or element hidden). Injecting deterministic recovery scroll.",
+                        "payload": {"reflection": reflection}
+                    }
+                    if adb and adb.device_id:
+                        # Fallback recovery: Swipe up to reveal more UI elements
+                        adb.swipe(500, 1500, 500, 500, 400)
+                        await asyncio.sleep(1.0)
+                    # Loop naturally continues to next step to re-plan based on scrolled state
+                
+                elif reflection["strategy"] == "ESCALATE_TO_USER":
+                    yield {
+                        "type": "CHARACTER_STATE",
+                        "state": "ERROR",
+                        "speech": f"I encountered an error during execution: {reflection['reasoning']}"
+                    }
+                    break
+                # -----------------------------------------
+
+                if step_idx == 0:
+                     self.progressor.start_task(task_id, plan.get("summary", user_prompt), [step], active_app)
+                progress_info = self.progressor.update_step(task_id, step_idx, action_name, reflection)
 
                 executed_trajectory.append({
-                    "step": idx,
-                    "action": step.get("action"),
+                    "step": step_idx,
+                    "action": action_name,
                     "target": step.get("target"),
                     "status": reflection["status"],
                     "reflection": reflection
@@ -327,11 +409,12 @@ class AgentOrchestrator:
 
                 yield {
                     "type": "LOG_STEP",
-                    "step": "REFLECTION",
-                    "title": f"Hierarchical Reflection: Step {idx+1}/{len(steps_list)} [{reflection['status']}]",
-                    "description": f"Strategy: {reflection['strategy']} | {reflection['reasoning']}. Overall progress: {progress_info['progress_percent']}%.",
+                    "step": "ACTION_LOOP",
+                    "title": f"Closed-Loop Execute: Step {step_idx+1}/{max_steps}",
+                    "description": f"Action: {action_name} -> {step.get('target', '')}. Status: {reflection['status']}",
                     "payload": {
-                        "step_index": idx,
+                        "step_index": step_idx,
+                        "action": step,
                         "reflection": reflection,
                         "progress": progress_info,
                         "tool_result": tool_result
@@ -398,24 +481,23 @@ class AgentOrchestrator:
             self.memory.log_action_audit(user_id, plan.get("intent", "task"), plan["summary"], risk_tier, True)
 
     def _execute_plan_tools(self, plan: Dict[str, Any], screen_context: Any) -> Dict[str, Any]:
-        intent = plan.get("intent")
-        if intent == "inspect_screen":
-            nodes = [n.dict() for n in screen_context.visible_nodes] if screen_context else []
-            app_title = screen_context.title if screen_context else "Active Screen"
-            return execute_tool("analyze_screen", {"nodes": nodes, "active_app": app_title})
-        if intent == "schedule_meeting":
-            return execute_tool("schedule_meeting", {"attendee": "John Vance", "time_slot": "Tomorrow at 3:00 PM"})
-        if intent == "book_movie":
-            return execute_tool("search_movies", {"movie_name": "Interstellar 70mm IMAX"})
-        if intent == "order_food":
-            return execute_tool("search_food", {"cuisine": "Biryani", "is_vegetarian": True})
-
-        # Execute first action from steps if mapped to a tool
+        # Hardcoded demo intents (book_movie, order_food) have been removed.
+        # Now generic action routing occurs here.
         steps = plan.get("steps", [])
-        if steps:
-            action_name = steps[0].get("action", "").lower()
-            if action_name in ["open_app", "launch_app"]:
-                target = steps[0].get("target", "cinema")
-                return execute_tool("launch_app", {"app_name": target})
+        if not steps:
+            return {"status": "SUCCESS", "message": "No actions to execute."}
+            
+        step = steps[0]
+        action_name = step.get("action", "").lower()
+        target = step.get("target", "")
 
-        return {"status": "SUCCESS", "message": "Actions dispatched and verified via Tool Registry."}
+        if action_name in ["open_app", "launch_app"]:
+            return execute_tool("launch_app", {"app_name": target})
+        elif action_name == "tap":
+            return {"status": "SUCCESS", "message": f"Physical tap intended on '{target}'"}
+        elif action_name == "input_text":
+            return {"status": "SUCCESS", "message": f"Input text intended: '{target}'"}
+        elif action_name == "scroll":
+            return {"status": "SUCCESS", "message": f"Scroll intended: '{target}'"}
+            
+        return {"status": "SUCCESS", "message": f"Action '{action_name}' registered."}

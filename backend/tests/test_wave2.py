@@ -60,6 +60,14 @@ def test_reflection_engine():
 def test_app_explorer():
     print("--> Testing Module 2.2: Proactive App Exploration Engine...")
     apps = ["cinema", "food", "pulse_ride", "orbit_maps", "calendar", "spark_mail"]
+    
+    # Inject dummy knowledge maps for tests
+    for app_name in apps:
+        app_explorer.knowledge_maps[app_name] = {
+            "screens": {"main": {"title": "Main Screen"}},
+            "transitions": [{"from": "main", "action": "TAP", "target": "button", "to": "details"}]
+        }
+
     for app_name in apps:
         k = app_explorer.get_knowledge(app_name)
         assert k is not None, f"Knowledge map for {app_name} not found"

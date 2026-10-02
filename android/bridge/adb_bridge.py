@@ -31,7 +31,7 @@ class ADBBridge:
         self.backend_url = backend_url
         self.adb_bin = self._find_adb()
         self.device_id = None
-        self.client = httpx.Client(base_url=self.backend_url, timeout=30.0)
+        self.client = httpx.Client(base_url=self.backend_url, timeout=180.0)
 
     def _find_adb(self) -> Optional[str]:
         adb = shutil.which("adb")
@@ -140,6 +140,15 @@ class ADBBridge:
         cmd = [self.adb_bin, "-s", self.device_id, "shell", "input", "tap", str(x), str(y)]
         subprocess.run(cmd)
         print(f"[ADB Gesture] Tapped ({x}, {y}) on {self.device_id}")
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
+        """Injects a physical swipe gesture on Android screen."""
+        if not self.device_id:
+            print(f"[Simulated Swipe] -> ({x1}, {y1}) to ({x2}, {y2})")
+            return
+        cmd = [self.adb_bin, "-s", self.device_id, "shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)]
+        subprocess.run(cmd)
+        print(f"[ADB Gesture] Swiped from ({x1}, {y1}) to ({x2}, {y2}) on {self.device_id}")
 
     def type_text(self, text: str):
         """Injects text typing into focused field on Android screen."""

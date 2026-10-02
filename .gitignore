@@ -37,6 +37,8 @@ backend/synapse_memory.db
 # Temporary Screenshots, Test Captures & Logs
 backend/*.png
 *.log
+backend/scripts/*.json
+backend/scripts/output/
 
 # Environment variables & secrets
 .env

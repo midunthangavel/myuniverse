@@ -77,45 +77,52 @@ class QwenPawMobileLoop:
 
     def evaluate_governance(self, intent: str, planned_action: Dict[str, Any]) -> Dict[str, Any]:
         """
-        QwenPaw Composable Governance Gate:
-        - ALLOW: Autonomous execution for low-risk actions.
-        - ASK: Human approval checkpoint (biometric/PIN) for payments or communications.
-        - DENY: Hard block for dangerous operations.
+        QwenPaw Composable Governance Gate (Upgraded):
+        Uses semantic semantic categorization across action, target, and intent
+        to assign risk tiers (ALLOW, ASK, DENY) robustly.
         """
         action_name = planned_action.get("action", "").upper()
+        target = str(planned_action.get("target", "")).lower()
+        summary = str(planned_action.get("summary", "")).lower()
         amount_str = str(planned_action.get("amount", "0"))
         
-        # Hard DENY check
-        deny_keywords = ["FORMAT", "FACTORY_RESET", "EXPORT_KEYS", "OVERRIDE_ROOT"]
-        if any(dk in action_name for dk in deny_keywords):
+        # High-Risk semantic vectors
+        destructive_semantics = ["format", "reset", "wipe", "delete all", "root", "uninstall"]
+        financial_semantics = ["pay", "buy", "purchase", "checkout", "transfer", "subscribe", "book", "order"]
+        privacy_semantics = ["password", "credential", "auth", "social security", "credit card", "private"]
+        
+        combined_text = f"{action_name} {target} {summary}"
+        
+        # Hard DENY check (Destructive / Security Override)
+        if any(d in combined_text for d in destructive_semantics):
             return {
                 "decision": "DENY",
-                "reason": f"Action '{action_name}' is permanently blocked by security policy.",
+                "reason": f"Semantic risk engine blocked destructive operation in intent: '{intent}'.",
                 "requires_modal": False
             }
 
-        # ASK check (financial / sensitive communications)
-        if "PAY" in action_name or "BUY" in action_name or "BOOK" in action_name or "SEND_EMAIL" in action_name:
+        # ASK check (Financial / Privacy)
+        if any(f in combined_text for f in financial_semantics) or amount_str not in ["0", "$0.00", ""]:
             return {
                 "decision": "ASK",
-                "reason": f"Financial / external action requires user biometric authorization.",
+                "reason": "Financial transaction or high-risk privacy context detected. Biometric Auth required.",
                 "requires_modal": True,
-                "prompt": f"Authorize payment for {planned_action.get('summary', 'transaction')}?"
+                "prompt": f"Authorize security gate for: {planned_action.get('summary', 'transaction')}?"
             }
 
-        # Medium-risk check
-        if "DELETE" in action_name or "CANCEL" in action_name:
+        # Moderate ASK check (Single deletions)
+        if "delete" in combined_text or "cancel" in combined_text or "remove" in combined_text:
             return {
                 "decision": "ASK",
                 "reason": "Destructive data modification requires confirmation.",
                 "requires_modal": True,
-                "prompt": f"Confirm deletion of {planned_action.get('target', 'item')}?"
+                "prompt": f"Confirm deletion/cancellation of {planned_action.get('target', 'item')}?"
             }
 
-        # ALLOW default
+        # ALLOW default (Read-only / Navigation)
         return {
             "decision": "ALLOW",
-            "reason": "Autonomous navigation and read-only action permitted.",
+            "reason": "Semantic profile indicates safe autonomous navigation.",
             "requires_modal": False
         }
 
