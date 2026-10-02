@@ -13,14 +13,51 @@ import sqlite3
 from typing import Dict, Any, List, Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "synapse_memory.db")
-SECRET_KEY = os.getenv("SYNAPSE_GOVERNANCE_SECRET", "synapse-hmac-secure-token-gate-key-2026").encode()
+SECRET_KEY_STR = os.getenv("SYNAPSE_GOVERNANCE_SECRET")
+if not SECRET_KEY_STR or SECRET_KEY_STR == "synapse-hmac-secure-token-gate-key-2026":
+    # In a real production environment, this would raise an error.
+    # For this transition, we'll log loudly but still allow it so as not to break the dev environment entirely.
+    print("WARNING: Using default or empty SYNAPSE_GOVERNANCE_SECRET. DO NOT USE IN PRODUCTION.")
+    SECRET_KEY_STR = "synapse-hmac-secure-token-gate-key-2026"
+SECRET_KEY = SECRET_KEY_STR.encode()
 
 class ApprovalTokenManager:
     """Generates and validates HMAC-signed one-time execution tokens with 120s TTL."""
     
     def __init__(self, ttl_seconds: int = 120):
         self.ttl_seconds = ttl_seconds
-        self.used_tokens: set = set()
+        self.db_path = DB_PATH
+        self._init_db()
+
+    def _get_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    def _init_db(self):
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS used_tokens (
+                token TEXT PRIMARY KEY,
+                consumed_at REAL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def _is_consumed(self, token_str: str) -> bool:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM used_tokens WHERE token = ?", (token_str,))
+        exists = cur.fetchone() is not None
+        conn.close()
+        return exists
+
+    def _consume_token(self, token_str: str):
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO used_tokens (token, consumed_at) VALUES (?, ?)", (token_str, time.time()))
+        conn.commit()
+        conn.close()
 
     def generate_token(self, task_id: str, action: str, amount: str, user_id: str = "user_default") -> Dict[str, Any]:
         issued_at = int(time.time())
@@ -41,7 +78,7 @@ class ApprovalTokenManager:
         }
 
     def verify_token(self, token_str: str, expected_task_id: str, expected_user_id: str, expected_action: str, expected_amount: str) -> Dict[str, Any]:
-        if token_str in self.used_tokens:
+        if self._is_consumed(token_str):
             return {"valid": False, "reason": "TOKEN_ALREADY_USED"}
 
         parts = token_str.split("_")
@@ -63,7 +100,7 @@ class ApprovalTokenManager:
             return {"valid": False, "reason": "INVALID_SIGNATURE"}
 
         # Consume token
-        self.used_tokens.add(token_str)
+        self._consume_token(token_str)
         return {"valid": True, "task_id": expected_task_id, "timestamp": now}
 
 
@@ -156,11 +193,23 @@ class FinancialAuditLedger:
         conn = self._get_connection()
         cur = conn.cursor()
         status = "AUTHORIZED" if approved else "DECLINED"
+        
+        # Append-only: Insert a new record for the state change
         cur.execute("""
-            UPDATE financial_audit_ledger
-            SET status = ?, approved_at = ?, notes = ?
+            SELECT user_id, action, amount, token
+            FROM financial_audit_ledger
             WHERE task_id = ?
-        """, (status, time.time(), notes, task_id))
+            ORDER BY timestamp ASC LIMIT 1
+        """, (task_id,))
+        row = cur.fetchone()
+        
+        if row:
+            user_id, action, amount, token = row
+            cur.execute("""
+                INSERT INTO financial_audit_ledger (timestamp, user_id, task_id, action, amount, status, token, approved_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (time.time(), user_id, task_id, action, amount, status, token, time.time(), notes))
+            
         conn.commit()
         conn.close()
 
@@ -198,6 +247,8 @@ class FinancialAuditLedger:
             SELECT user_id, action, amount, status
             FROM financial_audit_ledger
             WHERE task_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
         """, (task_id,))
         row = cur.fetchone()
         conn.close()

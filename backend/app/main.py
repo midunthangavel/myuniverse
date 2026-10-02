@@ -922,7 +922,19 @@ async def run_task(req: TaskRequest):
 # ==========================================
 @app.websocket("/ws/agent")
 async def websocket_agent_endpoint(websocket: WebSocket):
+    # Enforce API Key / Token Auth
+    api_key = websocket.query_params.get("token") or websocket.headers.get("X-API-Key")
+    expected_key = os.getenv("SYNAPSE_API_KEY", "dev-synapse-secret-key-2026")
+    if api_key != expected_key:
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+        
     await websocket.accept()
+    
+    # Derive identity from connection, not from untrusted client payload
+    tenant_id = websocket.query_params.get("tenant_id", "tenant_default")
+    session_id = websocket.query_params.get("session_id", "session_default")
+    
     try:
         while True:
             raw_data = await websocket.receive_text()
@@ -931,7 +943,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
 
             if msg_type == "RUN_TASK":
                 task_req = TaskRequest(
-                    user_id=payload.get("user_id", "user_default"),
+                    user_id=tenant_id,
                     prompt=payload.get("prompt", ""),
                     screen_context=payload.get("screen_context")
                 )
@@ -940,7 +952,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
 
             elif msg_type == "CONFIRM_ACTION":
                 plan = payload.get("plan", {})
-                user_id = payload.get("user_id", "user_default")
+                user_id = tenant_id
 
                 memory_store.log_action_audit(
                     user_id,
