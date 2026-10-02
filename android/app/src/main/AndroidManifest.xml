@@ -66,7 +66,9 @@
         <service
             android:name=".overlay.FloatingCharacterOverlayService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="AI_ASSISTANT_OVERLAY"/>
+        </service>
 
         <!-- 3. Screen Capture & MediaProjection Streaming Service -->
         <service

@@ -206,7 +206,7 @@ class AgentOrchestrator:
         # ==============================================================
         # STEP 5: DENSE VECTOR MEMORY & LOCAL LLM PLAN FORMULATION
         # ==============================================================
-        semantic_matches = self.vector_memory.semantic_search(user_prompt, n_results=3)
+        semantic_matches = self.vector_memory.semantic_search(user_prompt, user_id=user_id, n_results=3)
         if not semantic_matches:
             raw_sqlite = self.memory.retrieve_context(user_id, "general", user_prompt)
             semantic_matches = [{"text": m["text"], "type": m["type"]} for m in raw_sqlite]
@@ -298,102 +298,45 @@ class AgentOrchestrator:
             }
             await asyncio.sleep(0.3)
 
-            # Module 2.1: Dynamic Closed-Loop Execution
+            # Module 2.1: Dynamic Closed-Loop Execution (Observer -> Grounder -> Executor -> Verifier)
             max_steps = 10
             executed_trajectory = []
             
-            # Try to load local ADB Bridge for true autonomous loop observation
-            adb = None
-            try:
-                import sys
-                import os
-                bridge_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-                if bridge_path not in sys.path:
-                    sys.path.append(bridge_path)
-                from android.bridge.adb_bridge import ADBBridge
-                adb = ADBBridge()
-                adb.select_device()
-            except Exception as e:
-                print(f"[Agent] ADB Bridge not available: {e}")
+            from .device.action_engine import android_action_engine
+            
+            steps_list = plan.get("steps", [])
+            task_success = True
 
-            # True Closed Loop: Observe -> Plan (1 step) -> Act -> Verify
-            for step_idx in range(max_steps):
-                # 1. OBSERVE (Fresh state)
-                if adb and adb.device_id:
-                    active_screen_nodes = adb.dump_ui_nodes()
-                    screenshot = adb.capture_screenshot_base64()
-                    parsed_screen = self.vision.parse_screen(
-                        accessibility_nodes=active_screen_nodes,
-                        active_app=active_app,
-                        screen_title=screen_title,
-                        image_base64=screenshot
-                    )
-                
-                # 2. PLAN (If not the first step, replan based on new state)
-                if step_idx > 0:
-                    plan = await self.local_llm.plan_task(
-                        user_prompt, 
-                        semantic_matches, 
-                        {"visible_nodes": active_screen_nodes, "title": screen_title}
-                    )
-                
-                steps_list = plan.get("steps", [])
-                if not steps_list:
+            for step_idx, step in enumerate(steps_list):
+                if step_idx >= max_steps:
                     break
-                    
-                # Take ONLY the immediate next logical step
-                step = steps_list[0] 
+
                 action_name = step.get("action", "ACT").upper()
-                
+                target = step.get("target", "")
+
                 if action_name in ["DONE", "EXPLAIN_RESULT"]:
                     break
 
-                before_state = {"app": active_app, "title": screen_title, "nodes": active_screen_nodes}
-                
-                # 3. ACT
-                tool_result = self._execute_plan_tools({"intent": plan.get("intent"), "steps": [step]}, request.screen_context)
-                
-                if adb and adb.device_id:
-                     print(f"[Agent Debug] LLM Action: {action_name}, Target: {step.get('target', 'None')}")
-                     if action_name in ["TAP", "CLICK", "PRESS"]:
-                         target = step.get("target", "")
-                         coords = self.vision.ground_instruction(target, parsed_screen).get("click_coordinates", [0, 0])
-                         print(f"[Agent Debug] Computed coords for {target}: {coords}")
-                         if isinstance(coords, list) and len(coords) >= 2:
-                             adb.tap(coords[0], coords[1])
-                     elif action_name in ["TYPE", "INPUT"]:
-                         text = step.get("text", step.get("value", step.get("target", "")))
-                         print(f"[Agent Debug] Typing text: {text}")
-                         adb.type_text(text)
-                
-                # 4. OBSERVE & VERIFY
-                # (In a real implementation, we would fetch the state AGAIN here to verify)
-                after_state = {"app": active_app, "title": f"{screen_title} (Step {step_idx+1})", "nodes": active_screen_nodes}
-                reflection = self.reflector.reflect(before_state, after_state, step, active_app)
-                
-                # --- PHASE 3: FALLBACK TREE & RECOVERY ---
-                if reflection["strategy"] == "RETRY_ADJUSTED":
-                    yield {
-                        "type": "LOG_STEP",
-                        "step": "FALLBACK_TREE",
-                        "title": "Fallback Tree Triggered",
-                        "description": "NOOP detected (tap missed or element hidden). Injecting deterministic recovery scroll.",
-                        "payload": {"reflection": reflection}
+                # Execute using the true Action Engine (handles Observe -> Ground -> Execute -> Verify loop)
+                exec_result = await android_action_engine.execute_semantic_action(
+                    action=action_name,
+                    target=target,
+                    value=step.get("text", step.get("value", step.get("target", "")))
+                )
+
+                if exec_result.success:
+                    reflection = {
+                        "status": "SUCCESS",
+                        "strategy": "CONTINUE",
+                        "reasoning": "Action executed and verified via visual diff."
                     }
-                    if adb and adb.device_id:
-                        # Fallback recovery: Swipe up to reveal more UI elements
-                        adb.swipe(500, 1500, 500, 500, 400)
-                        await asyncio.sleep(1.0)
-                    # Loop naturally continues to next step to re-plan based on scrolled state
-                
-                elif reflection["strategy"] == "ESCALATE_TO_USER":
-                    yield {
-                        "type": "CHARACTER_STATE",
-                        "state": "ERROR",
-                        "speech": f"I encountered an error during execution: {reflection['reasoning']}"
+                else:
+                    reflection = {
+                        "status": "FAILED",
+                        "strategy": "ESCALATE_TO_USER",
+                        "reasoning": exec_result.error or "Verification failed after recovery attempts."
                     }
-                    break
-                # -----------------------------------------
+                    task_success = False
 
                 if step_idx == 0:
                      self.progressor.start_task(task_id, plan.get("summary", user_prompt), [step], active_app)
@@ -402,7 +345,7 @@ class AgentOrchestrator:
                 executed_trajectory.append({
                     "step": step_idx,
                     "action": action_name,
-                    "target": step.get("target"),
+                    "target": target,
                     "status": reflection["status"],
                     "reflection": reflection
                 })
@@ -410,54 +353,64 @@ class AgentOrchestrator:
                 yield {
                     "type": "LOG_STEP",
                     "step": "ACTION_LOOP",
-                    "title": f"Closed-Loop Execute: Step {step_idx+1}/{max_steps}",
-                    "description": f"Action: {action_name} -> {step.get('target', '')}. Status: {reflection['status']}",
+                    "title": f"Closed-Loop Execute: Step {step_idx+1}/{len(steps_list)}",
+                    "description": f"Action: {action_name} -> {target}. Verified: {exec_result.success}",
                     "payload": {
                         "step_index": step_idx,
                         "action": step,
                         "reflection": reflection,
                         "progress": progress_info,
-                        "tool_result": tool_result
+                        "execution_result": exec_result.to_dict() if hasattr(exec_result, 'to_dict') else None
                     }
                 }
-                await asyncio.sleep(0.2)
+
+                if not exec_result.success:
+                    yield {
+                        "type": "CHARACTER_STATE",
+                        "state": "ERROR",
+                        "speech": f"I encountered an error during execution: {reflection['reasoning']}"
+                    }
+                    break
 
             # Module 2.1 & 2.3: Trajectory Reflector Learning Extraction
-            trajectory_learning = self.trajectory_reflector.extract_learnings(
-                user_goal=user_prompt,
-                trajectory_steps=executed_trajectory,
-                final_state={"app": active_app, "title": screen_title},
-                app_name=active_app
-            )
-            self.app_memory.record_successful_trajectory(
-                app=active_app,
-                task=user_prompt,
-                steps=steps_list
-            )
+            # ONLY record successful trajectories (Do not pollute RAG memory with failures)
+            if task_success and executed_trajectory:
+                trajectory_learning = self.trajectory_reflector.extract_learnings(
+                    user_goal=user_prompt,
+                    trajectory_steps=executed_trajectory,
+                    final_state={"app": active_app, "title": screen_title},
+                    app_name=active_app
+                )
+                self.app_memory.record_successful_trajectory(
+                    app=active_app,
+                    task=user_prompt,
+                    steps=steps_list
+                )
 
-            # Reinforce personal habit in flywheel & QwenPaw ReMe Layer 3
-            learn_res = self.flywheel.record_interaction(
-                user_id=user_id,
-                domain=plan.get("domain", "general"),
-                selection=plan.get("summary", ""),
-                feedback_type="CONFIRMED_SELECTION"
-            )
-            self.reme.auto_memory_evolve(f"Confirmed preference in {plan.get('domain', 'general')}: {plan.get('summary')}")
+                # Reinforce personal habit in flywheel & QwenPaw ReMe Layer 3
+                learn_res = self.flywheel.record_interaction(
+                    user_id=user_id,
+                    domain=plan.get("domain", "general"),
+                    selection=plan.get("summary", ""),
+                    feedback_type="CONFIRMED_SELECTION"
+                )
+                self.reme.auto_memory_evolve(f"Confirmed preference in {plan.get('domain', 'general')}: {plan.get('summary')}")
 
-            yield {
-                "type": "LOG_STEP",
-                "step": "LEARNING",
-                "title": "Flywheel, App RAG & ReMe Memory Updated",
-                "description": f"Updated confidence for '{learn_res.get('text', 'Habit')}': {learn_res.get('new_confidence')}. Stored trajectory shortcut in ChromaDB app memory.",
-                "payload": {
-                    "flywheel": learn_res,
-                    "trajectory_learning": trajectory_learning,
-                    "reme_working_steps": self.reme.working_memory["current_step"]
+                yield {
+                    "type": "LOG_STEP",
+                    "step": "LEARNING",
+                    "title": "Flywheel, App RAG & ReMe Memory Updated",
+                    "description": f"Updated confidence for '{learn_res.get('text', 'Habit')}': {learn_res.get('new_confidence')}. Stored verified trajectory.",
+                    "payload": {
+                        "flywheel": learn_res,
+                        "trajectory_learning": trajectory_learning,
+                        "reme_working_steps": self.reme.working_memory["current_step"]
+                    }
                 }
-            }
 
             # Generate Neural Voice Speech Response
-            speech_response = f"Done! I've completed: {plan['summary']}."
+            final_status = "completed" if task_success else "encountered issues with"
+            speech_response = f"Done! I've {final_status}: {plan['summary']}."
             audio_uri = None
             try:
                 audio_uri = await self.tts.generate_audio_base64(speech_response)
@@ -466,7 +419,7 @@ class AgentOrchestrator:
 
             yield {
                 "type": "CHARACTER_STATE",
-                "state": "SUCCESS",
+                "state": "SUCCESS" if task_success else "ERROR",
                 "speech": speech_response,
                 "audio_data_uri": audio_uri
             }
@@ -478,7 +431,7 @@ class AgentOrchestrator:
                 "payload": {"has_neural_voice": audio_uri is not None}
             }
 
-            self.memory.log_action_audit(user_id, plan.get("intent", "task"), plan["summary"], risk_tier, True)
+            self.memory.log_action_audit(user_id, plan.get("intent", "task"), plan["summary"], risk_tier, task_success)
 
     def _execute_plan_tools(self, plan: Dict[str, Any], screen_context: Any) -> Dict[str, Any]:
         # Hardcoded demo intents (book_movie, order_food) have been removed.

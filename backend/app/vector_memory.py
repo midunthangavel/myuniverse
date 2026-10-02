@@ -27,9 +27,10 @@ class VectorMemoryStore:
             metadata={"description": "Dense vector memories for personal AI agent"}
         )
 
-    def add_memory(self, doc_id: str, text: str, metadata: Dict[str, Any] = None):
+    def add_memory(self, doc_id: str, text: str, user_id: str = "user_default", metadata: Dict[str, Any] = None):
         """Adds or updates a memory with its dense semantic vector embedding."""
         meta = metadata or {}
+        meta["user_id"] = user_id
         # Ensure primitive metadata values
         cleaned_meta = {k: str(v) if not isinstance(v, (str, int, float, bool)) else v for k, v in meta.items()}
         
@@ -45,7 +46,7 @@ class VectorMemoryStore:
         except Exception:
             pass
 
-    def semantic_search(self, query: str, n_results: int = 3) -> List[Dict[str, Any]]:
+    def semantic_search(self, query: str, user_id: str = "user_default", n_results: int = 3) -> List[Dict[str, Any]]:
         """
         Executes semantic vector similarity search against user memory.
         Returns matched text, distance, and metadata.
@@ -55,10 +56,14 @@ class VectorMemoryStore:
             return []
 
         limit = min(n_results, total)
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=limit
-        )
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=limit,
+                where={"user_id": user_id}
+            )
+        except Exception:
+            return []
 
         matches = []
         if results and "documents" in results and results["documents"]:
@@ -79,13 +84,14 @@ class VectorMemoryStore:
 
         return matches
 
-    def seed_from_sqlite(self, sqlite_profile: Dict[str, Any]):
+    def seed_from_sqlite(self, sqlite_profile: Dict[str, Any], user_id: str = "user_default"):
         """Indexes all memories from SQLite into ChromaDB."""
         # 1. Explicit
         for item in sqlite_profile.get("explicit", []):
             self.add_memory(
                 doc_id=item["id"],
                 text=f"Preference: {item['text']}",
+                user_id=user_id,
                 metadata={"category": "EXPLICIT", "source": "user_defined", "type": item.get("category", "General")}
             )
 
@@ -94,6 +100,7 @@ class VectorMemoryStore:
             self.add_memory(
                 doc_id=item["id"],
                 text=f"Learned Habit: {item['text']}",
+                user_id=user_id,
                 metadata={"category": "LEARNED", "confidence": item.get("confidence", "85%"), "source": "observed_behavior"}
             )
 
@@ -102,6 +109,7 @@ class VectorMemoryStore:
             self.add_memory(
                 doc_id=item["id"],
                 text=f"Entity {item.get('name')}: {item.get('role', '')} {item.get('address', '')}",
+                user_id=user_id,
                 metadata={"category": "ENTITY", "priority": item.get("priority", "Standard")}
             )
 
@@ -110,6 +118,7 @@ class VectorMemoryStore:
             self.add_memory(
                 doc_id=item["id"],
                 text=f"Schedule Routine {item.get('title')}: {item.get('schedule_rule', '')}",
+                user_id=user_id,
                 metadata={"category": "ROUTINE", "active": True}
             )
 

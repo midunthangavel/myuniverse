@@ -4,9 +4,10 @@ FastAPI Server for Synapse Personal AI Agent Backend
 Provides REST API & Realtime WebSockets with Local LLM, ChromaDB, Cloud Vision, Continuous Flywheel Learning & Edge-TTS.
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+import os
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import json
@@ -55,14 +56,29 @@ app = FastAPI(
     version="1.6.0"
 )
 
-# Enable CORS for local web simulator & mobile bridges
+# Secure CORS for production
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+# API Authentication Middleware
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    # Enforce auth on all API routes except health check
+    if request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        api_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("SYNAPSE_API_KEY", "dev-synapse-secret-key-2026")
+        if api_key != expected_key:
+            return JSONResponse(
+                status_code=403, 
+                content={"detail": "Forbidden: Invalid or missing X-API-Key authentication header."}
+            )
+    return await call_next(request)
 
 memory_store = MemoryStore()
 vector_memory = VectorMemoryStore()
@@ -363,9 +379,10 @@ def get_governance_ledger_endpoint(limit: int = 50):
 @app.post("/api/governance/intercept-otp")
 def intercept_otp_endpoint(req: OTPInterceptRequest):
     extracted = financial_gate.otp_interceptor.extract_otp(req.text, req.source)
+    # SECURITY: Never expose intercepted OTP directly through REST API response
     return {
         "detected": extracted is not None,
-        "otp": extracted
+        "message": "OTP securely intercepted and stored in local runtime." if extracted else "No OTP detected."
     }
 
 # ==========================================

@@ -6,6 +6,7 @@ Implements Standard Android UI Role Ontology and Screen Type Classification.
 """
 
 import time
+import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 from .ui_parser import UIAutomatorParser
 
@@ -92,11 +93,20 @@ class AndroidScreenState:
                 return el
         return None
 
+    @property
+    def fingerprint(self) -> str:
+        """Fast deterministic hash to verify if UI state changed without heavy VLM."""
+        core_state = f"{self.app_package}:{self.activity_name}:{self.screen_type}"
+        ui_state = "|".join([f"{e.node_id}:{e.text}:{e.clickable}" for e in self.elements])
+        raw = f"{core_state}::{ui_state}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "app_package": self.app_package,
             "activity_name": self.activity_name,
             "screen_type": self.screen_type,
+            "fingerprint": self.fingerprint,
             "display_size": list(self.display_size),
             "keyboard_visible": self.keyboard_visible,
             "total_elements": len(self.elements),
@@ -107,6 +117,9 @@ class AndroidScreenState:
 
 class AndroidStateEngine:
     """Fuses multi-modal perception sources into a structured AndroidScreenState."""
+
+    def __init__(self):
+        self._cached_display_size = None
 
     # Standard Ontology Mapping for Android Widgets
     ONTOLOGY_ROLE_MAP = {
@@ -210,12 +223,16 @@ class AndroidStateEngine:
                                     activity = segs[1] if len(segs) > 1 else activity
                                     break
                 
-                # 2. Check window size
-                _, size_out, _ = await device_controller._run_adb(["shell", "wm", "size"])
-                if "Physical size:" in size_out:
-                    dim = size_out.replace("Physical size:", "").strip().split("x")
-                    if len(dim) == 2:
-                        wm_size = (int(dim[0]), int(dim[1]))
+                # 2. Check window size (cached to skip expensive redundant ADB queries)
+                if self._cached_display_size:
+                    wm_size = self._cached_display_size
+                else:
+                    _, size_out, _ = await device_controller._run_adb(["shell", "wm", "size"])
+                    if "Physical size:" in size_out:
+                        dim = size_out.replace("Physical size:", "").strip().split("x")
+                        if len(dim) == 2:
+                            wm_size = (int(dim[0]), int(dim[1]))
+                            self._cached_display_size = wm_size
 
                 # 3. Dump UI Hierarchy
                 ui_res = await device_controller.get_ui_hierarchy()

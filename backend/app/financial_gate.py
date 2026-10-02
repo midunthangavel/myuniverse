@@ -40,7 +40,7 @@ class ApprovalTokenManager:
             "ttl_seconds": self.ttl_seconds
         }
 
-    def verify_token(self, token_str: str, expected_task_id: str) -> Dict[str, Any]:
+    def verify_token(self, token_str: str, expected_task_id: str, expected_user_id: str, expected_action: str, expected_amount: str) -> Dict[str, Any]:
         if token_str in self.used_tokens:
             return {"valid": False, "reason": "TOKEN_ALREADY_USED"}
 
@@ -49,9 +49,18 @@ class ApprovalTokenManager:
             return {"valid": False, "reason": "MALFORMED_TOKEN"}
 
         issued_at = int(parts[1])
+        expires_at = issued_at + self.ttl_seconds
         now = int(time.time())
-        if now - issued_at > self.ttl_seconds:
+        if now > expires_at:
             return {"valid": False, "reason": "TOKEN_EXPIRED"}
+
+        # Recompute HMAC signature and cryptographically verify
+        payload = f"{expected_task_id}:{expected_user_id}:{expected_action}:{expected_amount}:{issued_at}:{expires_at}"
+        expected_signature = hmac.new(SECRET_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        expected_token = f"tok_{issued_at}_{expected_signature[:32]}"
+        
+        if not hmac.compare_digest(token_str, expected_token):
+            return {"valid": False, "reason": "INVALID_SIGNATURE"}
 
         # Consume token
         self.used_tokens.add(token_str)
@@ -182,6 +191,20 @@ class FinancialAuditLedger:
             for r in rows
         ]
 
+    def get_request(self, task_id: str) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT user_id, action, amount, status
+            FROM financial_audit_ledger
+            WHERE task_id = ?
+        """, (task_id,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return {"user_id": row[0], "action": row[1], "amount": row[2], "status": row[3]}
+        return None
+
 
 class FinancialGate:
     """Master governance orchestrator for high-risk and payment actions."""
@@ -220,7 +243,16 @@ class FinancialGate:
 
     def authorize_transaction(self, token_str: str, task_id: str, user_id: str = "user_default") -> Dict[str, Any]:
         """Validates cryptographic token and marks transaction approved."""
-        res = self.token_manager.verify_token(token_str, task_id)
+        # Retrieve original request to bind token to exact action and amount
+        req = self.ledger.get_request(task_id)
+        if not req:
+            return {"success": False, "reason": "TASK_NOT_FOUND"}
+        if req["status"] != "PENDING_APPROVAL":
+            return {"success": False, "reason": f"TASK_ALREADY_{req['status']}"}
+        if req["user_id"] != user_id:
+            return {"success": False, "reason": "USER_MISMATCH"}
+
+        res = self.token_manager.verify_token(token_str, task_id, req["user_id"], req["action"], req["amount"])
         if not res["valid"]:
             self.ledger.log_approval(task_id, approved=False, notes=f"Authorization rejected: {res['reason']}")
             return {"success": False, "reason": res["reason"]}
