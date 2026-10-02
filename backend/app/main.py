@@ -44,6 +44,7 @@ from .device import (
     multi_app_orchestrator,
     ExpectedOutcome
 )
+from .device.gateway import device_gateway
 from .browser_agent import browser_engine
 from .vlm_perception import vlm_engine
 from .scheduler import scheduler_daemon
@@ -922,24 +923,27 @@ async def run_task(req: TaskRequest):
 # ==========================================
 @app.websocket("/ws/agent")
 async def websocket_agent_endpoint(websocket: WebSocket):
-    # Enforce API Key / Token Auth
-    api_key = websocket.query_params.get("token") or websocket.headers.get("X-API-Key")
-    expected_key = os.getenv("SYNAPSE_API_KEY", "dev-synapse-secret-key-2026")
-    if api_key != expected_key:
-        await websocket.close(code=1008, reason="Unauthorized")
+    token = websocket.query_params.get("token") or websocket.headers.get("X-API-Key")
+    identity = device_gateway.authenticate_device(token)
+    
+    if not identity:
+        await websocket.close(code=1008, reason="Unauthorized Device")
         return
         
-    await websocket.accept()
+    device_id = identity["device_id"]
+    tenant_id = identity["tenant_id"]
     
-    # Derive identity from connection, not from untrusted client payload
-    tenant_id = websocket.query_params.get("tenant_id", "tenant_default")
-    session_id = websocket.query_params.get("session_id", "session_default")
+    session = await device_gateway.connect(websocket, device_id, tenant_id)
     
     try:
         while True:
             raw_data = await websocket.receive_text()
             payload = json.loads(raw_data)
             msg_type = payload.get("type")
+
+            if msg_type == "COMMAND_RESULT":
+                session.handle_result(payload)
+                continue
 
             if msg_type == "RUN_TASK":
                 task_req = TaskRequest(
@@ -987,9 +991,10 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 })
 
     except WebSocketDisconnect:
-        pass
+        device_gateway.disconnect(session.session_id)
     except Exception as e:
         print(f"WebSocket error: {e}")
+        device_gateway.disconnect(session.session_id)
 
 if __name__ == "__main__":
     uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)
