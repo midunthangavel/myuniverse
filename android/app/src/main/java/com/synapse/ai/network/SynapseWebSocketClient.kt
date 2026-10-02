@@ -89,7 +89,124 @@ class SynapseWebSocketClient(
                 val speech = msg.optString("speech", "Confirmed")
                 FloatingCharacterOverlayService.instance?.updateCharacterState("SUCCESS", speech)
             }
+            
+            "COMMAND" -> {
+                handleCommand(msg)
+            }
         }
+    }
+
+    private fun handleCommand(msg: JSONObject) {
+        val taskId = msg.optString("task_id")
+        val commandId = msg.optString("command_id")
+        val sequence = msg.optInt("sequence")
+        val action = msg.optJSONObject("action")
+        
+        if (action == null) {
+            sendErrorResult(taskId, commandId, sequence, "MISSING_ACTION")
+            return
+        }
+        
+        val accessibility = SynapseAccessibilityService.instance
+        if (accessibility == null) {
+            sendErrorResult(taskId, commandId, sequence, "ACCESSIBILITY_SERVICE_NOT_RUNNING")
+            return
+        }
+
+        val actionType = action.optString("type")
+        val target = action.optJSONObject("target")
+        val resourceId = target?.optString("resource_id")
+        
+        var success = false
+
+        when (actionType) {
+            "TAP" -> {
+                if (resourceId != null) {
+                    val node = accessibility.findNodeById(resourceId)
+                    if (node != null) {
+                        accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
+                            sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
+                        }
+                        return
+                    }
+                }
+            }
+            "TYPE" -> {
+                 if (resourceId != null) {
+                     val text = action.optString("value")
+                     val node = accessibility.findNodeById(resourceId)
+                     if (node != null) {
+                         accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
+                             accessibility.performSetText(text)
+                             sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
+                         }
+                         return
+                     }
+                 }
+            }
+            "SWIPE" -> {
+                 val dir = action.optString("direction", "UP")
+                 if (dir == "UP") {
+                     accessibility.performSwipe(500f, 1500f, 500f, 500f) { _ -> sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }
+                 } else {
+                     accessibility.performSwipe(500f, 500f, 500f, 1500f) { _ -> sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }
+                 }
+                 return
+            }
+            "GLOBAL_ACTION" -> {
+                 val name = action.optString("name")
+                 when (name) {
+                     "BACK" -> success = accessibility.performBack()
+                     "HOME" -> success = accessibility.performHome()
+                     "RECENTS" -> success = accessibility.performRecents()
+                 }
+                 sendCommandResult(taskId, commandId, sequence, if (success) "VERIFIED" else "FAILED", accessibility)
+                 return
+            }
+            "OBSERVE_ONLY" -> {
+                 sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
+                 return
+            }
+        }
+        
+        if (!success) {
+            sendErrorResult(taskId, commandId, sequence, "ACTION_FAILED_OR_TARGET_NOT_FOUND")
+        }
+    }
+
+    private fun sendCommandResult(taskId: String, commandId: String, sequence: Int, status: String, accessibility: SynapseAccessibilityService) {
+        val screenNodes = accessibility.dumpScreenHierarchy()
+        val jsonNodes = JSONArray()
+        screenNodes.forEach { jsonNodes.put(it.toJson()) }
+        
+        val fgPackage = screenNodes.firstOrNull()?.packageName ?: "unknown"
+        val fingerprint = "fg_${fgPackage}_nodes_${screenNodes.size}"
+
+        val payload = JSONObject().apply {
+            put("type", "COMMAND_RESULT")
+            put("task_id", taskId)
+            put("command_id", commandId)
+            put("sequence", sequence)
+            put("status", status)
+            put("screen_fingerprint", fingerprint)
+            put("observation", JSONObject().apply {
+                put("foreground_package", fgPackage)
+                put("visible_nodes", jsonNodes)
+            })
+        }
+        webSocket?.send(payload.toString())
+    }
+    
+    private fun sendErrorResult(taskId: String, commandId: String, sequence: Int, reason: String) {
+        val payload = JSONObject().apply {
+            put("type", "COMMAND_RESULT")
+            put("task_id", taskId)
+            put("command_id", commandId)
+            put("sequence", sequence)
+            put("status", "FAILED")
+            put("reason", reason)
+        }
+        webSocket?.send(payload.toString())
     }
 
     fun sendTask(prompt: String) {

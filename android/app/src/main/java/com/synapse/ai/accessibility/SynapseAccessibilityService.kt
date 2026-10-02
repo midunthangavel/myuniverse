@@ -110,6 +110,10 @@ class SynapseAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun findNodeById(id: String): ScreenNode? {
+        return dumpScreenHierarchy().find { it.id == id }
+    }
+
     /**
      * Programmatic Touch Tap Injection via Android Accessibility GestureDescription.
      * Dispatches physical tap without requiring root or developer options.
