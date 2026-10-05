@@ -5,6 +5,12 @@ Provides REST API & Realtime WebSockets with Local LLM, ChromaDB, Cloud Vision, 
 """
 
 import os
+import sys
+import asyncio
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
@@ -946,6 +952,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 continue
 
             if msg_type == "RUN_TASK":
+                print("Received RUN_TASK!", flush=True)
                 task_req = TaskRequest(
                     user_id=tenant_id,
                     prompt=payload.get("prompt", ""),
@@ -954,12 +961,18 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 
                 async def run_the_task():
                     try:
+                        print("Starting orchestrator.process_task_stream...", flush=True)
                         async for event in orchestrator.process_task_stream(task_req):
+                            print(f"Sending event to websocket: {event.get('type')}", flush=True)
                             await websocket.send_json(event)
+                            print(f"Event sent: {event.get('type')}", flush=True)
                     except Exception as e:
-                        print(f"Task error: {e}")
+                        import traceback
+                        print(f"Task error: {e}", flush=True)
+                        traceback.print_exc()
                 
                 asyncio.create_task(run_the_task())
+                continue
 
             elif msg_type == "CONFIRM_ACTION":
                 plan = payload.get("plan", {})
@@ -998,9 +1011,14 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 })
 
     except WebSocketDisconnect:
+        print(f"WebSocket disconnected normally: {session.session_id}", flush=True)
         device_gateway.disconnect(session.session_id)
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        import traceback
+        print(f"WebSocket error: {e}", flush=True)
+        traceback.print_exc()
+        import sys
+        sys.stdout.flush()
         device_gateway.disconnect(session.session_id)
 
 if __name__ == "__main__":

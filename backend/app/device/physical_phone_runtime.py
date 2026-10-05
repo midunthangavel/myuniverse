@@ -57,6 +57,13 @@ class PhysicalPhoneRuntime:
 
     # Core Action Primitives
     
+    async def open_app(self, package_name: str, expected: Dict[str, Any] = None) -> Dict[str, Any]:
+        action = {
+            "type": "OPEN_APP",
+            "package": package_name
+        }
+        return await self._execute_remote(action, expected)
+
     async def tap(self, resource_id: str, expected: Dict[str, Any] = None) -> Dict[str, Any]:
         action = {
             "type": "TAP",

@@ -157,8 +157,8 @@ class FloatingCharacterOverlayService : Service() {
     }
 
     private fun onCharacterTapped() {
-        Log.i(TAG, "Floating character tapped - toggling assistant voice input.")
-        // Broadcasts intent or triggers quick voice listening
+        Log.i(TAG, "Floating character tapped - triggering task.")
+        com.synapse.ai.MainActivity.wsClient?.sendTask("open instagram chats and send 'hi' message to a person as username as 'M U T I X'")
     }
 
     fun updateCharacterState(state: String, speech: String?) {

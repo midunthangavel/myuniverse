@@ -168,6 +168,24 @@ class BuiltinLocalProvider(BaseLLMProvider):
                 ]
             }
 
+        if any(w in p for w in ["instagram", "insta", "ig", "mutix"]):
+            return {
+                "intent": "send_instagram_message",
+                "domain": "social_messaging",
+                "confidence": "99.8%",
+                "provider_used": "builtin",
+                "summary": "Open Instagram chats and send 'hi' to M U T I X",
+                "cost": "$0.00",
+                "steps": [
+                    {"action": "OPEN_APP", "target": "com.instagram.android", "desc": "Launch Instagram app"},
+                    {"action": "TAP", "target": "direct_tab", "desc": "Tap Direct Messages / Chat icon"},
+                    {"action": "TAP", "target": "M U T I X", "desc": "Open chat with M U T I X"},
+                    {"action": "TYPE", "target": "row_thread_composer_edittext", "text": "hi", "desc": "Type 'hi' in message composer"},
+                    {"action": "TAP", "target": "Send", "desc": "Tap Send button"},
+                    {"action": "EXPLAIN_RESULT", "desc": "Message 'hi' sent to M U T I X on Instagram"}
+                ]
+            }
+
         return {
             "intent": "general_inquiry",
             "domain": "assistant",

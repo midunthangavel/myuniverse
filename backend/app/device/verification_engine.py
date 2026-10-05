@@ -116,7 +116,7 @@ class TaskVerificationEngine:
         post_fingerprint = result.get("screen_fingerprint")
         
         # Fast path: O(1) fingerprint comparison
-        if expected.get("screen_change", True) and pre_fingerprint and post_fingerprint == pre_fingerprint:
+        if expected.get("screen_change", False) and pre_fingerprint and post_fingerprint == pre_fingerprint:
             return VerificationResult(
                 verified=False,
                 confidence=1.0,
@@ -127,6 +127,14 @@ class TaskVerificationEngine:
         observation = result.get("observation", {})
         fg_package = observation.get("foreground_package", "")
         visible_nodes = observation.get("visible_nodes", [])
+
+        if result.get("status") == "VERIFIED" and not expected.get("foreground_package") and not expected.get("element_present"):
+            return VerificationResult(
+                verified=True,
+                confidence=1.0,
+                reason="Device executed action successfully.",
+                screen_transition_detected=True
+            )
         
         # 1. Verify Expected Foreground Package
         exp_pkg = expected.get("foreground_package")

@@ -252,6 +252,7 @@ class AgentOrchestrator:
             plan["financial_token"] = gate_eval["token"]
             plan["token_expires_in"] = gate_eval["expires_in_seconds"]
 
+        print(f"DEBUG PLAN: {plan}", flush=True)
         yield {
             "type": "LOG_STEP",
             "step": "PLAN",
@@ -324,7 +325,15 @@ class AgentOrchestrator:
                     "element_present": step.get("expected_element", "")
                 }
                 
-                if action_name == "TAP":
+                yield {
+                    "type": "CHARACTER_STATE",
+                    "state": "WORKING",
+                    "speech": step.get("desc", f"Executing {action_name}...")
+                }
+                
+                if action_name == "OPEN_APP":
+                    exec_result = await physical_runtime.open_app(package_name=target, expected=expected_outcome)
+                elif action_name == "TAP":
                     exec_result = await physical_runtime.tap(resource_id=target, expected=expected_outcome)
                 elif action_name in ["TYPE", "INPUT_TEXT"]:
                     exec_result = await physical_runtime.type(resource_id=target, text=step.get("text", step.get("value", "")), expected=expected_outcome)
@@ -336,6 +345,8 @@ class AgentOrchestrator:
                     exec_result = await physical_runtime.observe()
 
                 success = exec_result.get("success", False)
+                safe_res = str(exec_result).encode('ascii', 'backslashreplace').decode('ascii')
+                print(f"DEBUG STEP {step_idx}: action={action_name} target={target} result={safe_res}", flush=True)
 
                 if success:
                     reflection = {
@@ -352,7 +363,7 @@ class AgentOrchestrator:
                     task_success = False
 
                 if step_idx == 0:
-                     self.progressor.start_task(task_id, plan.get("summary", user_prompt), [step], active_app)
+                    self.progressor.start_task(task_id, plan.get("summary", user_prompt), steps_list, active_app)
                 progress_info = self.progressor.update_step(task_id, step_idx, action_name, reflection)
 
                 executed_trajectory.append({

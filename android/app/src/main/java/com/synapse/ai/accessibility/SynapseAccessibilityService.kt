@@ -110,8 +110,27 @@ class SynapseAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun findNodeById(id: String): ScreenNode? {
-        return dumpScreenHierarchy().find { it.id == id }
+    fun findNodeById(target: String): ScreenNode? {
+        val nodes = dumpScreenHierarchy()
+        // 1. Exact or suffix id match (e.g. "direct_tab" matches "com.instagram.android:id/direct_tab")
+        val byId = nodes.find {
+            it.id != null && (it.id == target || it.id.endsWith("/$target") || it.id.contains(target, ignoreCase = true))
+        }
+        if (byId != null) return byId
+
+        // 2. Exact text or content description
+        val byExactText = nodes.find {
+            it.text?.equals(target, ignoreCase = true) == true ||
+            it.contentDescription?.equals(target, ignoreCase = true) == true
+        }
+        if (byExactText != null) return byExactText
+
+        // 3. Substring match
+        val byContains = nodes.find {
+            it.text?.contains(target, ignoreCase = true) == true ||
+            it.contentDescription?.contains(target, ignoreCase = true) == true
+        }
+        return byContains
     }
 
     /**
@@ -167,12 +186,31 @@ class SynapseAccessibilityService : AccessibilityService() {
      */
     fun performSetText(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
-        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focused != null && focused.isEditable) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         }
-        return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+        fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (node == null) return null
+            if (node.isEditable) return node
+            for (i in 0 until node.childCount) {
+                val found = findEditable(node.getChild(i))
+                if (found != null) return found
+            }
+            return null
+        }
+        val editable = findEditable(root)
+        if (editable != null) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            return editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+        return false
     }
 
     fun performBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)

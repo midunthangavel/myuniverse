@@ -23,6 +23,16 @@
     <!-- Screen Wake Lock for Long-Running Tasks -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Package Visibility for Launching Target Apps -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <queries>
+        <package android:name="com.instagram.android" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -65,7 +75,7 @@
         <!-- 2. The Persistent Floating Character Overlay Service -->
         <service
             android:name=".overlay.FloatingCharacterOverlayService"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="AI_ASSISTANT_OVERLAY"/>
         </service>

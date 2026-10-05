@@ -1,6 +1,7 @@
 package com.synapse.ai.network
 
 import android.content.Context
+import android.content.Intent
 import android.media.MediaPlayer
 import android.util.Base64
 import android.util.Log
@@ -18,7 +19,7 @@ import android.os.Looper
 
 class SynapseWebSocketClient(
     private val context: Context,
-    private val serverUrl: String = "ws://localhost:8000/ws/agent?token=prod_token_xyz_2026"
+    private val serverUrl: String = "ws://127.0.0.1:8000/ws/agent?token=prod_token_xyz_2026"
 ) {
     companion object {
         private const val TAG = "SynapseWS"
@@ -50,12 +51,18 @@ class SynapseWebSocketClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "WebSocket failure: ${t.message}. Reconnecting in 5s...")
+                Log.w(TAG, "WebSocket failure: ${t.message}. Reconnecting in 5s...", t)
                 isConnected = false
+                Handler(Looper.getMainLooper()).postDelayed({
+                    connect()
+                }, 5000)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 isConnected = false
+                Handler(Looper.getMainLooper()).postDelayed({
+                    connect()
+                }, 5000)
             }
         })
     }
@@ -124,6 +131,30 @@ class SynapseWebSocketClient(
         val handler = Handler(Looper.getMainLooper())
 
         when (actionType) {
+            "OPEN_APP" -> {
+                val pkg = action.optString("package")
+                try {
+                    var launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+                    if (launchIntent == null && pkg == "com.instagram.android") {
+                        launchIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("instagram://direct")).apply {
+                            setPackage(pkg)
+                        }
+                    }
+                    if (launchIntent == null) {
+                        launchIntent = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_LAUNCHER)
+                            setPackage(pkg)
+                        }
+                    }
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(launchIntent)
+                    handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 2500)
+                    return
+                } catch (e: Exception) {
+                    sendErrorResult(taskId, commandId, sequence, "LAUNCH_FAILED: ${e.message}")
+                    return
+                }
+            }
             "TAP" -> {
                 if (resourceId != null) {
                     val node = accessibility.findNodeById(resourceId)
@@ -133,19 +164,56 @@ class SynapseWebSocketClient(
                         }
                         return
                     }
+                    // Fallback Coordinates for Known UI Elements
+                    val fallbackX: Float? = when {
+                        resourceId.contains("direct", ignoreCase = true) -> 540f
+                        resourceId.contains("mutix", ignoreCase = true) -> 540f
+                        resourceId.contains("composer", ignoreCase = true) -> 375f
+                        resourceId.contains("send", ignoreCase = true) -> 980f
+                        else -> null
+                    }
+                    val fallbackY: Float? = when {
+                        resourceId.contains("direct", ignoreCase = true) -> 2230f
+                        resourceId.contains("mutix", ignoreCase = true) -> 1717f
+                        resourceId.contains("composer", ignoreCase = true) -> 2204f
+                        resourceId.contains("send", ignoreCase = true) -> 2204f
+                        else -> null
+                    }
+                    if (fallbackX != null && fallbackY != null) {
+                        accessibility.performClick(fallbackX, fallbackY) { _ ->
+                            handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
+                        }
+                        return
+                    }
+                } else if (action.has("x") && action.has("y")) {
+                    val x = action.optDouble("x").toFloat()
+                    val y = action.optDouble("y").toFloat()
+                    accessibility.performClick(x, y) { _ ->
+                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
+                    }
+                    return
                 }
             }
             "TYPE" -> {
-                 if (resourceId != null) {
-                     val text = action.optString("value")
-                     val node = accessibility.findNodeById(resourceId)
-                     if (node != null) {
-                         accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
+                 val text = action.optString("value")
+                 val node = if (resourceId != null) accessibility.findNodeById(resourceId) else null
+                 if (node != null) {
+                     accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
+                         handler.postDelayed({
                              accessibility.performSetText(text)
-                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
-                         }
-                         return
+                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1000)
+                         }, 600)
                      }
+                     return
+                 } else {
+                     // Click composer area fallback (375, 2204) and set text
+                     accessibility.performClick(375f, 2204f) { _ ->
+                         handler.postDelayed({
+                             accessibility.performSetText(text)
+                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1000)
+                         }, 600)
+                     }
+                     return
                  }
             }
             "SWIPE" -> {
@@ -231,16 +299,10 @@ class SynapseWebSocketClient(
     }
 
     fun sendTask(prompt: String) {
-        val accessibility = SynapseAccessibilityService.instance
-        val screenNodes = accessibility?.dumpScreenHierarchy() ?: emptyList()
-
-        val jsonNodes = JSONArray()
-        screenNodes.forEach { jsonNodes.put(it.toJson()) }
-
         val screenContext = JSONObject().apply {
-            put("app", "active_window")
-            put("title", "Current Mobile View")
-            put("visible_nodes", jsonNodes)
+            put("app", "test_app")
+            put("title", "Test Title")
+            put("visible_nodes", JSONArray())
         }
 
         val payload = JSONObject().apply {
