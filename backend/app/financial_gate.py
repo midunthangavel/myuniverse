@@ -93,12 +93,23 @@ class ApprovalTokenManager:
 
 
 class OTPInterceptor:
-    """Extracts and stores transient One-Time Passwords from SMS or notifications."""
+    """
+    Extracts and manages transient One-Time Passwords with strict privacy masking,
+    active TTL auto-purging, and single-use consumption.
+    """
 
-    def __init__(self):
+    def __init__(self, ttl_seconds: int = 180):
+        self.ttl_seconds = ttl_seconds
         self.cached_otps: List[Dict[str, Any]] = []
 
+    def _purge_expired(self):
+        """Active in-memory garbage collection of expired verification codes."""
+        now = time.time()
+        self.cached_otps = [o for o in self.cached_otps if o["expires_at"] > now and not o.get("consumed", False)]
+
     def extract_otp(self, text: str, source: str = "notification") -> Optional[Dict[str, Any]]:
+        self._purge_expired()
+        
         # Regex for standard 4-8 digit verification codes
         patterns = [
             r"(?:code|otp|pin|verification|auth|password)[:\s]+([0-9]{4,8})",
@@ -120,21 +131,40 @@ class OTPInterceptor:
                     extracted_code = match.group(1)
 
         if extracted_code:
+            # Mask the source text to prevent storing cleartext sensitive notification content
+            masked_text = re.sub(r"\b" + re.escape(extracted_code) + r"\b", "****", text)
             record = {
                 "otp_code": extracted_code,
-                "source_text": text,
+                "source_masked": masked_text,
                 "source": source,
                 "extracted_at": time.time(),
-                "expires_at": time.time() + 300  # 5 min TTL
+                "expires_at": time.time() + self.ttl_seconds,
+                "consumed": False
             }
             self.cached_otps.append(record)
-            return record
+            return {
+                "detected": True,
+                "source": source,
+                "extracted_at": record["extracted_at"],
+                "expires_in_seconds": self.ttl_seconds
+            }
         return None
 
     def get_latest_valid_otp(self) -> Optional[Dict[str, Any]]:
+        self._purge_expired()
         now = time.time()
-        valid = [o for o in self.cached_otps if o["expires_at"] > now]
+        valid = [o for o in self.cached_otps if o["expires_at"] > now and not o.get("consumed", False)]
         return valid[-1] if valid else None
+
+    def consume_otp(self, otp_code: str) -> bool:
+        """Single-use OTP consumption: immediately burns the code to prevent replay attacks."""
+        self._purge_expired()
+        for o in self.cached_otps:
+            if o["otp_code"] == otp_code and not o.get("consumed", False):
+                o["consumed"] = True
+                self._purge_expired()
+                return True
+        return False
 
 
 class FinancialAuditLedger:
@@ -177,29 +207,37 @@ class FinancialAuditLedger:
         conn.commit()
         conn.close()
 
-    def log_approval(self, task_id: str, approved: bool, notes: str = ""):
+    def log_approval(self, task_id: str, approved: bool, notes: str = "") -> bool:
         conn = self._get_connection()
         cur = conn.cursor()
         status = "AUTHORIZED" if approved else "DECLINED"
         
-        # Append-only: Insert a new record for the state change
+        # Check current status to guarantee atomic single transition
         cur.execute("""
-            SELECT user_id, action, amount, token
+            SELECT user_id, action, amount, token, status
             FROM financial_audit_ledger
             WHERE task_id = ?
-            ORDER BY timestamp ASC LIMIT 1
+            ORDER BY timestamp DESC LIMIT 1
         """, (task_id,))
         row = cur.fetchone()
         
-        if row:
-            user_id, action, amount, token = row
-            cur.execute("""
-                INSERT INTO financial_audit_ledger (timestamp, user_id, task_id, action, amount, status, token, approved_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (time.time(), user_id, task_id, action, amount, status, token, time.time(), notes))
+        if not row:
+            conn.close()
+            return False
+            
+        user_id, action, amount, token, current_status = row
+        if current_status != "PENDING_APPROVAL":
+            conn.close()
+            return False
+            
+        cur.execute("""
+            INSERT INTO financial_audit_ledger (timestamp, user_id, task_id, action, amount, status, token, approved_at, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (time.time(), user_id, task_id, action, amount, status, token, time.time(), notes))
             
         conn.commit()
         conn.close()
+        return True
 
     def get_ledger(self, limit: int = 50) -> List[Dict[str, Any]]:
         conn = self._get_connection()

@@ -110,43 +110,50 @@ class TaskVerificationEngine:
         pre_fingerprint: Optional[str] = None
     ) -> VerificationResult:
         """
-        Phase G Verification: Verifies semantic expected outcomes using the WSS protocol observation.
-        Replaces legacy generic UI change detection.
+        Truthful Closed-Loop Verification: Verifies semantic expected outcomes using the WSS protocol observation.
+        Disentangles device dispatch ACK from actual verifiable outcome evidence.
         """
-        post_fingerprint = result.get("screen_fingerprint")
-        
-        # Fast path: O(1) fingerprint comparison
-        if expected.get("screen_change", False) and pre_fingerprint and post_fingerprint == pre_fingerprint:
+        # 1. Device Execution Failure Check
+        if result.get("status") in ["FAILED", "ERROR"] or result.get("execution_status") in ["FAILED", "ERROR"]:
             return VerificationResult(
                 verified=False,
                 confidence=1.0,
-                reason="Screen fingerprint is identical. No state transition occurred.",
+                reason=result.get("reason", "Device execution failed."),
                 screen_transition_detected=False
             )
+
+        post_fingerprint = result.get("screen_fingerprint")
+        action_type = (result.get("action", {}).get("type") or result.get("action_type") or "").upper()
+        is_observe_only = action_type in ["OBSERVE", "OBSERVE_ONLY"]
+        
+        # 2. Strict State Transition / Fingerprint Check
+        # For mutating actions (TAP, TYPE, OPEN_APP, SWIPE), identical fingerprint indicates failed transition
+        if not is_observe_only and pre_fingerprint and post_fingerprint and post_fingerprint == pre_fingerprint:
+            # If an explicit element was expected and is present, verify if element matches
+            exp_elem = expected.get("element_present")
+            if not exp_elem:
+                return VerificationResult(
+                    verified=False,
+                    confidence=1.0,
+                    reason="Screen fingerprint is identical. No state transition occurred.",
+                    screen_transition_detected=False
+                )
             
         observation = result.get("observation", {})
         fg_package = observation.get("foreground_package", "")
         visible_nodes = observation.get("visible_nodes", [])
 
-        if result.get("status") == "VERIFIED" and not expected.get("foreground_package") and not expected.get("element_present"):
-            return VerificationResult(
-                verified=True,
-                confidence=1.0,
-                reason="Device executed action successfully.",
-                screen_transition_detected=True
-            )
-        
-        # 1. Verify Expected Foreground Package
+        # 3. Verify Expected Foreground Package
         exp_pkg = expected.get("foreground_package")
         if exp_pkg and exp_pkg.lower() not in fg_package.lower():
             return VerificationResult(
                 verified=False,
-                confidence=0.9,
-                reason=f"Expected package '{exp_pkg}' but got '{fg_package}'.",
+                confidence=0.95,
+                reason=f"Expected package '{exp_pkg}' but active package is '{fg_package}'.",
                 screen_transition_detected=True
             )
             
-        # 2. Verify Semantic Expected Element
+        # 4. Verify Semantic Expected Element
         exp_elem = expected.get("element_present")
         if exp_elem:
             exp_lower = exp_elem.lower()
@@ -154,33 +161,36 @@ class TaskVerificationEngine:
             for node in visible_nodes:
                 text = (node.get("text") or "").lower()
                 desc = (node.get("desc") or "").lower()
-                if exp_lower in text or exp_lower in desc:
+                node_id = (node.get("id") or "").lower()
+                if exp_lower in text or exp_lower in desc or exp_lower in node_id:
                     found = True
                     break
             
             if not found:
                 return VerificationResult(
                     verified=False,
-                    confidence=0.9,
-                    reason=f"Expected element '{exp_elem}' not found in screen nodes.",
+                    confidence=0.95,
+                    reason=f"Expected element '{exp_elem}' not found in active screen nodes.",
                     screen_transition_detected=True
                 )
                 
-        # 3. Verify Disappearance (element_not_present)
+        # 5. Verify Disappearance (element_not_present)
         not_exp_elem = expected.get("element_not_present")
         if not_exp_elem:
             not_exp_lower = not_exp_elem.lower()
             for node in visible_nodes:
                 text = (node.get("text") or "").lower()
                 desc = (node.get("desc") or "").lower()
-                if not_exp_lower in text or not_exp_lower in desc:
+                node_id = (node.get("id") or "").lower()
+                if not_exp_lower in text or not_exp_lower in desc or not_exp_lower in node_id:
                     return VerificationResult(
                         verified=False,
-                        confidence=0.9,
+                        confidence=0.95,
                         reason=f"Element '{not_exp_elem}' was expected to disappear but is still visible.",
                         screen_transition_detected=True
                     )
-        # 4. Verify specific node attributes
+
+        # 6. Verify specific node attributes
         exp_node = expected.get("node_state")
         if exp_node:
             res_id = exp_node.get("resource_id")
@@ -205,18 +215,44 @@ class TaskVerificationEngine:
             if res_id and not node_found:
                 return VerificationResult(
                     verified=False,
-                    confidence=0.9,
+                    confidence=0.95,
                     reason=f"Expected node with resource_id '{res_id}' not found.",
                     screen_transition_detected=True
                 )
             elif res_id and not attr_matched:
                 return VerificationResult(
                     verified=False,
-                    confidence=0.9,
+                    confidence=0.95,
                     reason=mismatch_reason,
                     screen_transition_detected=True
                 )
         
+        # 7. Outcome decision when no explicit semantic criteria provided
+        has_explicit_expectations = bool(exp_pkg or exp_elem or not_exp_elem or exp_node)
+        if not has_explicit_expectations:
+            if is_observe_only:
+                return VerificationResult(
+                    verified=True,
+                    confidence=1.0,
+                    reason="Observation captured successfully.",
+                    screen_transition_detected=False
+                )
+            # If screen fingerprint transitioned, state changed
+            if pre_fingerprint and post_fingerprint and pre_fingerprint != post_fingerprint:
+                return VerificationResult(
+                    verified=True,
+                    confidence=0.9,
+                    reason="Screen transition verified via fingerprint delta.",
+                    screen_transition_detected=True
+                )
+            # If nothing was expected and fingerprint didn't change (or wasn't tracked)
+            return VerificationResult(
+                verified=False,
+                confidence=0.8,
+                reason="Cannot verify outcome: no state transition detected and no expected elements specified.",
+                screen_transition_detected=False
+            )
+
         return VerificationResult(
             verified=True,
             confidence=0.95,

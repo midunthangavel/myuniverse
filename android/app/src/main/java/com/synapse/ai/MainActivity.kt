@@ -44,7 +44,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Automatically connect to backend via adb reverse reverse-port
         if (wsClient == null || wsClient?.isConnected == false) {
-            wsClient = SynapseWebSocketClient(this, "ws://127.0.0.1:8000/ws/agent?token=prod_token_xyz_2026")
+            val token = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                .getString("device_token", "dev_token_nexus_01") ?: "dev_token_nexus_01"
+            wsClient = SynapseWebSocketClient(this, "ws://127.0.0.1:8000/ws/agent?token=$token")
             wsClient?.connect()
         }
         setContent {

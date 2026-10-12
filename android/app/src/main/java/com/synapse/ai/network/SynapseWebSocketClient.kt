@@ -7,6 +7,7 @@ import android.util.Base64
 import android.util.Log
 import com.synapse.ai.accessibility.SynapseAccessibilityService
 import com.synapse.ai.overlay.FloatingCharacterOverlayService
+import com.synapse.ai.security.BiometricGateActivity
 import okhttp3.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,10 +20,12 @@ import android.os.Looper
 
 class SynapseWebSocketClient(
     private val context: Context,
-    private val serverUrl: String = "ws://127.0.0.1:8000/ws/agent?token=prod_token_xyz_2026"
+    private val serverUrl: String = "ws://127.0.0.1:8000/ws/agent?token=dev_token_nexus_01"
 ) {
     companion object {
         private const val TAG = "SynapseWS"
+        var instance: SynapseWebSocketClient? = null
+            private set
     }
 
     private val client = OkHttpClient.Builder()
@@ -32,6 +35,10 @@ class SynapseWebSocketClient(
     private var webSocket: WebSocket? = null
     var isConnected = false
         private set
+
+    init {
+        instance = this
+    }
 
     fun connect() {
         val request = Request.Builder().url(serverUrl).build()
@@ -88,18 +95,32 @@ class SynapseWebSocketClient(
                 Log.i(TAG, "[$step] $title")
             }
 
-            "HIGH_RISK_PROMPT" -> {
-                // Triggers Biometric Authorization Gate
+            "HIGH_RISK_PROMPT", "FINANCIAL_AUTH_REQUIRED" -> {
                 val plan = msg.optJSONObject("plan")
-                Log.w(TAG, "HIGH RISK PROMPT: ${plan?.optString("summary")}")
-                // In full app: Launches BiometricPrompt
+                val taskId = msg.optString("task_id", plan?.optString("task_id", "unknown_task") ?: "unknown_task")
+                val token = msg.optString("token", plan?.optString("token", "") ?: "")
+                val amount = msg.optString("amount", plan?.optString("amount", "$0.00") ?: "$0.00")
+                val action = msg.optString("action", plan?.optString("summary", "Payment Action") ?: "Payment Action")
+                val scope = msg.optString("scope", "FINANCIAL_PAYMENT")
+
+                Log.w(TAG, "HIGH RISK PROMPT received. Launching Native Biometric Gate for Task: $taskId ($amount)")
+
+                val intent = Intent(context, BiometricGateActivity::class.java).apply {
+                    putExtra("task_id", taskId)
+                    putExtra("token", token)
+                    putExtra("amount", amount)
+                    putExtra("action", action)
+                    putExtra("scope", scope)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
             }
 
             "ACTION_CONFIRMED" -> {
                 val speech = msg.optString("speech", "Confirmed")
                 FloatingCharacterOverlayService.instance?.updateCharacterState("SUCCESS", speech)
             }
-            
+
             "COMMAND" -> {
                 handleCommand(msg)
             }
@@ -111,12 +132,12 @@ class SynapseWebSocketClient(
         val commandId = msg.optString("command_id")
         val sequence = msg.optInt("sequence")
         val action = msg.optJSONObject("action")
-        
+
         if (action == null) {
             sendErrorResult(taskId, commandId, sequence, "MISSING_ACTION")
             return
         }
-        
+
         val accessibility = SynapseAccessibilityService.instance
         if (accessibility == null) {
             sendErrorResult(taskId, commandId, sequence, "ACCESSIBILITY_SERVICE_NOT_RUNNING")
@@ -126,8 +147,7 @@ class SynapseWebSocketClient(
         val actionType = action.optString("type")
         val target = action.optJSONObject("target")
         val resourceId = target?.optString("resource_id")
-        
-        var success = false
+
         val handler = Handler(Looper.getMainLooper())
 
         when (actionType) {
@@ -148,126 +168,138 @@ class SynapseWebSocketClient(
                     }
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(launchIntent)
-                    handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 2500)
+                    handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 2500)
                     return
                 } catch (e: Exception) {
                     sendErrorResult(taskId, commandId, sequence, "LAUNCH_FAILED: ${e.message}")
                     return
                 }
             }
+
             "TAP" -> {
                 if (resourceId != null) {
-                    val node = accessibility.findNodeById(resourceId)
-                    if (node != null) {
-                        accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
-                            handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
+                    // Resilient node lookup with dynamic scrolling and IME dismissal
+                    accessibility.findNodeWithScroll(resourceId, maxScrolls = 2) { node ->
+                        if (node != null) {
+                            accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
+                                handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1500)
+                            }
+                        } else {
+                            // Check if soft keyboard is obscuring element
+                            accessibility.dismissKeyboard()
+                            handler.postDelayed({
+                                val retryNode = accessibility.findNodeById(resourceId)
+                                if (retryNode != null) {
+                                    accessibility.performClick(retryNode.bounds.centerX().toFloat(), retryNode.bounds.centerY().toFloat()) { _ ->
+                                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1500)
+                                    }
+                                } else {
+                                    sendErrorResult(taskId, commandId, sequence, "TARGET_NOT_FOUND_AFTER_SCROLL_AND_KEYBOARD_DISMISS: $resourceId")
+                                }
+                            }, 300)
                         }
-                        return
                     }
-                    // Fallback Coordinates for Known UI Elements
-                    val fallbackX: Float? = when {
-                        resourceId.contains("direct", ignoreCase = true) -> 540f
-                        resourceId.contains("mutix", ignoreCase = true) -> 540f
-                        resourceId.contains("composer", ignoreCase = true) -> 375f
-                        resourceId.contains("send", ignoreCase = true) -> 980f
-                        else -> null
-                    }
-                    val fallbackY: Float? = when {
-                        resourceId.contains("direct", ignoreCase = true) -> 2230f
-                        resourceId.contains("mutix", ignoreCase = true) -> 1717f
-                        resourceId.contains("composer", ignoreCase = true) -> 2204f
-                        resourceId.contains("send", ignoreCase = true) -> 2204f
-                        else -> null
-                    }
-                    if (fallbackX != null && fallbackY != null) {
-                        accessibility.performClick(fallbackX, fallbackY) { _ ->
-                            handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
-                        }
-                        return
-                    }
+                    return
                 } else if (action.has("x") && action.has("y")) {
                     val x = action.optDouble("x").toFloat()
                     val y = action.optDouble("y").toFloat()
                     accessibility.performClick(x, y) { _ ->
-                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500)
+                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1500)
                     }
+                    return
+                } else {
+                    sendErrorResult(taskId, commandId, sequence, "TAP_MISSING_TARGET_OR_COORDINATES")
                     return
                 }
             }
+
             "TYPE" -> {
-                 val text = action.optString("value")
-                 val node = if (resourceId != null) accessibility.findNodeById(resourceId) else null
-                 if (node != null) {
-                     accessibility.performClick(node.bounds.centerX().toFloat(), node.bounds.centerY().toFloat()) { _ ->
-                         handler.postDelayed({
-                             accessibility.performSetText(text)
-                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1000)
-                         }, 600)
-                     }
-                     return
-                 } else {
-                     // Click composer area fallback (375, 2204) and set text
-                     accessibility.performClick(375f, 2204f) { _ ->
-                         handler.postDelayed({
-                             accessibility.performSetText(text)
-                             handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1000)
-                         }, 600)
-                     }
-                     return
-                 }
+                val text = action.optString("value")
+                val targetNode = if (resourceId != null) accessibility.findNodeById(resourceId) else accessibility.findFirstEditableNode()
+                if (targetNode != null) {
+                    accessibility.performClick(targetNode.bounds.centerX().toFloat(), targetNode.bounds.centerY().toFloat()) { _ ->
+                        handler.postDelayed({
+                            accessibility.performSetText(text)
+                            handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1000)
+                        }, 500)
+                    }
+                    return
+                } else {
+                    // Try to dismiss keyboard and find editable node
+                    accessibility.dismissKeyboard()
+                    handler.postDelayed({
+                        val fallbackEditable = accessibility.findFirstEditableNode()
+                        if (fallbackEditable != null) {
+                            accessibility.performClick(fallbackEditable.bounds.centerX().toFloat(), fallbackEditable.bounds.centerY().toFloat()) { _ ->
+                                handler.postDelayed({
+                                    accessibility.performSetText(text)
+                                    handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1000)
+                                }, 500)
+                            }
+                        } else {
+                            sendErrorResult(taskId, commandId, sequence, "NO_EDITABLE_TARGET_FOUND_ON_SCREEN")
+                        }
+                    }, 300)
+                    return
+                }
             }
+
             "SWIPE" -> {
-                 val dir = action.optString("direction", "UP")
-                 if (dir == "UP") {
-                     accessibility.performSwipe(500f, 1500f, 500f, 500f) { _ -> 
-                         handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500) 
-                     }
-                 } else {
-                     accessibility.performSwipe(500f, 500f, 500f, 1500f) { _ -> 
-                         handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility) }, 1500) 
-                     }
-                 }
-                 return
+                val dir = action.optString("direction", "UP")
+                if (dir == "UP") {
+                    accessibility.performSwipe(500f, 1500f, 500f, 500f) { _ ->
+                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1500)
+                    }
+                } else {
+                    accessibility.performSwipe(500f, 500f, 500f, 1500f) { _ ->
+                        handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility) }, 1500)
+                    }
+                }
+                return
             }
+
             "GLOBAL_ACTION" -> {
-                 val name = action.optString("name")
-                 when (name) {
-                     "BACK" -> success = accessibility.performBack()
-                     "HOME" -> success = accessibility.performHome()
-                     "RECENTS" -> success = accessibility.performRecents()
-                 }
-                 handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, if (success) "VERIFIED" else "FAILED", accessibility) }, 1500)
-                 return
+                val name = action.optString("name")
+                val success = when (name) {
+                    "BACK" -> accessibility.performBack()
+                    "HOME" -> accessibility.performHome()
+                    "RECENTS" -> accessibility.performRecents()
+                    else -> false
+                }
+                handler.postDelayed({ sendCommandResult(taskId, commandId, sequence, if (success) "DISPATCHED" else "FAILED", accessibility) }, 1500)
+                return
             }
+
             "OBSERVE_ONLY" -> {
-                 sendCommandResult(taskId, commandId, sequence, "VERIFIED", accessibility)
-                 return
+                sendCommandResult(taskId, commandId, sequence, "DISPATCHED", accessibility)
+                return
             }
-        }
-        
-        if (!success) {
-            sendErrorResult(taskId, commandId, sequence, "ACTION_FAILED_OR_TARGET_NOT_FOUND")
+
+            else -> {
+                sendErrorResult(taskId, commandId, sequence, "UNKNOWN_ACTION_TYPE: $actionType")
+                return
+            }
         }
     }
 
     private fun sendCommandResult(taskId: String, commandId: String, sequence: Int, status: String, accessibility: SynapseAccessibilityService) {
-        val screenNodes = accessibility.dumpScreenHierarchy()
+        val screenNodes = accessibility.dumpScreenHierarchy(forceRefresh = true)
         val jsonNodes = JSONArray()
         val sb = StringBuilder()
-        
+
         val fgPackage = screenNodes.firstOrNull()?.packageName ?: "unknown"
         sb.append(fgPackage).append("|")
-        
-        screenNodes.forEach { 
-            jsonNodes.put(it.toJson()) 
+
+        screenNodes.forEach {
+            jsonNodes.put(it.toJson())
             sb.append(it.id).append(":")
-              .append(it.text).append(":")
-              .append(it.contentDescription).append(":")
-              .append(it.className).append(":")
-              .append(it.isClickable).append(":")
-              .append(it.bounds.toShortString()).append(";")
+                .append(it.text).append(":")
+                .append(it.contentDescription).append(":")
+                .append(it.className).append(":")
+                .append(it.isClickable).append(":")
+                .append(it.bounds.toShortString()).append(";")
         }
-        
+
         val bytes = MessageDigest.getInstance("SHA-256").digest(sb.toString().toByteArray())
         val fingerprint = bytes.joinToString("") { "%02x".format(it) }
 
@@ -277,6 +309,7 @@ class SynapseWebSocketClient(
             put("command_id", commandId)
             put("sequence", sequence)
             put("status", status)
+            put("execution_status", status)
             put("screen_fingerprint", fingerprint)
             put("observation", JSONObject().apply {
                 put("foreground_package", fgPackage)
@@ -285,7 +318,7 @@ class SynapseWebSocketClient(
         }
         webSocket?.send(payload.toString())
     }
-    
+
     private fun sendErrorResult(taskId: String, commandId: String, sequence: Int, reason: String) {
         val payload = JSONObject().apply {
             put("type", "COMMAND_RESULT")
@@ -293,7 +326,30 @@ class SynapseWebSocketClient(
             put("command_id", commandId)
             put("sequence", sequence)
             put("status", "FAILED")
+            put("execution_status", "FAILED")
             put("reason", reason)
+        }
+        webSocket?.send(payload.toString())
+    }
+
+    fun sendBiometricAuthResult(
+        taskId: String,
+        token: String?,
+        status: String,
+        signature: String? = null,
+        amount: String? = null,
+        action: String? = null,
+        reason: String? = null
+    ) {
+        val payload = JSONObject().apply {
+            put("type", "BIOMETRIC_AUTH_RESULT")
+            put("task_id", taskId)
+            put("token", token ?: "")
+            put("status", status)
+            put("signature", signature ?: "")
+            put("amount", amount ?: "")
+            put("action", action ?: "")
+            put("reason", reason ?: "")
         }
         webSocket?.send(payload.toString())
     }

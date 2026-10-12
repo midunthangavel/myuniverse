@@ -24,7 +24,8 @@ export class AgentEngine {
 
   initWebSocket() {
     try {
-      this.ws = new WebSocket('ws://127.0.0.1:8000/ws/agent');
+      const token = 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026';
+      this.ws = new WebSocket(`ws://127.0.0.1:8000/ws/agent?token=${encodeURIComponent(token)}`);
 
       this.ws.onopen = () => {
         this.wsConnected = true;

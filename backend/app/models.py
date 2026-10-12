@@ -27,6 +27,7 @@ class TaskRequest(BaseModel):
     user_id: str = "user_default"
     prompt: str
     screen_context: Optional[ScreenContext] = None
+    idempotency_key: Optional[str] = None
 
 class ActionStep(BaseModel):
     action: str

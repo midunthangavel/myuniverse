@@ -35,6 +35,10 @@ from .progressor import task_progressor
 from .explorer import app_explorer
 from .app_memory import app_specific_memory
 from .financial_gate import financial_gate
+from .fastpath_router import fastpath_router
+from .capabilities import capability_registry
+from .latency_tracer import TaskTracer
+from .task_manager import task_manager, TaskState
 
 class AgentOrchestrator:
     def __init__(
@@ -72,6 +76,84 @@ class AgentOrchestrator:
         active_app = request.screen_context.app if request.screen_context else "home"
         screen_title = request.screen_context.title if request.screen_context else "Active Screen"
 
+        # Idempotency Tracking & State Machine (P6)
+        task_rec, is_duplicate = task_manager.create_or_get_task(
+            tenant_id=user_id,
+            prompt=user_prompt,
+            idempotency_key=getattr(request, "idempotency_key", None)
+        )
+        
+        tracer = TaskTracer(task_id=task_rec.task_id)
+
+        if is_duplicate and task_rec.result_cache:
+            yield {
+                "type": "LOG_STEP",
+                "step": "IDEMPOTENCY",
+                "title": f"Idempotency Cache Hit ({task_rec.task_id})",
+                "description": "Task request was already processed. Returning cached result without duplicate execution.",
+                "payload": task_rec.result_cache
+            }
+            yield {
+                "type": "CHARACTER_STATE",
+                "state": "SUCCESS",
+                "speech": f"Task already completed: {task_rec.result_cache.get('summary', user_prompt)}"
+            }
+            return
+
+        task_manager.transition_state(task_rec.task_id, TaskState.ROUTED)
+
+        # Tier 1: FastPath Deterministic Evaluation (P5)
+        fastpath_res = fastpath_router.route(user_prompt)
+        if fastpath_res.is_matched:
+            tracer.mark("fastpath_execution")
+            task_manager.transition_state(task_rec.task_id, TaskState.DISPATCHED, reason=f"FastPath: {fastpath_res.intent}")
+
+            yield {
+                "type": "CHARACTER_STATE",
+                "state": "WORKING",
+                "speech": fastpath_res.direct_speech or f"Executing FastPath action for '{user_prompt}'..."
+            }
+            yield {
+                "type": "LOG_STEP",
+                "step": "FASTPATH",
+                "title": f"FastPath Tier 1 Deterministic Route ({fastpath_res.intent} • {fastpath_res.latency_ms}ms)",
+                "description": "Bypassed general LLM token generation. Deterministic sub-second handler selected.",
+                "payload": fastpath_res.dict()
+            }
+
+            if fastpath_res.direct_plan:
+                from .device.physical_phone_runtime import PhysicalPhoneRuntime
+                physical_runtime = PhysicalPhoneRuntime(tenant_id=user_id)
+                for step in fastpath_res.direct_plan.get("steps", []):
+                    act = step.get("action")
+                    tgt = step.get("target")
+                    if act == "OPEN_APP":
+                        await physical_runtime.open_app(tgt, expected={"foreground_package": step.get("expected_package", "")})
+                    elif act == "GLOBAL_ACTION":
+                        await physical_runtime.global_action(tgt)
+
+            task_manager.transition_state(
+                task_rec.task_id, 
+                TaskState.VERIFIED, 
+                reason="FastPath verified", 
+                result_cache=fastpath_res.dict()
+            )
+            trace_info = tracer.finish()
+
+            yield {
+                "type": "CHARACTER_STATE",
+                "state": "SUCCESS",
+                "speech": fastpath_res.direct_speech or f"Completed FastPath task for: {user_prompt}"
+            }
+            yield {
+                "type": "LOG_STEP",
+                "step": "TELEMETRY",
+                "title": f"FastPath Latency Telemetry ({trace_info['total_latency_ms']}ms)",
+                "description": f"Target budget: {trace_info['target_budget']}. Meets FastPath: {trace_info['meets_fastpath_target']}.",
+                "payload": trace_info
+            }
+            return
+
         # Record in QwenPaw ReMe Layer 2 (Verbatim Episodic Turn)
         self.reme.record_turn("user", user_prompt, {"active_app": active_app, "title": screen_title})
         self.reme.reset_working_memory(user_prompt, request.screen_context.dict() if request.screen_context else {})
@@ -79,6 +161,7 @@ class AgentOrchestrator:
         # ==============================================================
         # STEP 1: LAYA SYSTEM 1 FAST CLASSIFICATION (<15ms single forward pass)
         # ==============================================================
+        tracer.mark("system1_triage")
         sys1_result = self.system1.classify_system1(user_prompt, active_app)
 
         # Immediate Character Micro-Reaction
@@ -118,7 +201,6 @@ class AgentOrchestrator:
                 "latency_ms": sys1_result["latency_ms"]
             }
         }
-        await asyncio.sleep(0.3)
 
         # ==============================================================
         # STEP 2: OPENVIKING VIRTUAL CONTEXT FILESYSTEM (viking:// L0/L1 Tiered Loading)
@@ -145,13 +227,13 @@ class AgentOrchestrator:
             "payload": {
                 "protocol": "viking://",
                 "loaded_nodes": [
-                    {"uri": n["uri"], "tier": n["tier"], "tokens": n["estimated_tokens"]}
+                    {"uri": n.get("uri", "viking://user/profile.md"), "tier": n.get("tier", "L1"), "tokens": n.get("estimated_tokens", 0)}
                     for n in viking_loaded_nodes
                 ],
-                "sample_content": viking_loaded_nodes[0]["content"] if viking_loaded_nodes else ""
+                "sample_content": viking_loaded_nodes[0].get("content", "") if viking_loaded_nodes else ""
             }
         }
-        await asyncio.sleep(0.3)
+
 
         # ==============================================================
         # STEP 3: SCRAPLING WEB INTELLIGENCE (If live research or prices/reviews needed)
@@ -177,7 +259,7 @@ class AgentOrchestrator:
                 "description": "Stealth mobile headers and adaptive DOM extractors retrieved live verified web facts.",
                 "payload": web_intel_result
             }
-            await asyncio.sleep(0.3)
+
 
         # ==============================================================
         # STEP 4: CLOUD SCREEN PERCEPTION (PaddleOCR + OmniParser Schema)
@@ -201,7 +283,7 @@ class AgentOrchestrator:
                 "ocr_blocks_count": len(parsed_screen["ocr_blocks"])
             }
         }
-        await asyncio.sleep(0.3)
+
 
         # ==============================================================
         # STEP 5: DENSE VECTOR MEMORY & LOCAL LLM PLAN FORMULATION
@@ -264,7 +346,7 @@ class AgentOrchestrator:
                 "visual_grounding": grounding_result
             }
         }
-        await asyncio.sleep(0.3)
+
 
         # ==============================================================
         # STEP 7: HANDLE EXECUTION OR HIGH-RISK HUMAN-IN-THE-LOOP PROMPT
@@ -297,7 +379,7 @@ class AgentOrchestrator:
                 "state": "WORKING",
                 "speech": "Executing grounded phone actions..."
             }
-            await asyncio.sleep(0.3)
+
 
             # Module 2.1: Dynamic Closed-Loop Execution
             max_steps = 10
@@ -457,6 +539,24 @@ class AgentOrchestrator:
             }
 
             self.memory.log_action_audit(user_id, plan.get("intent", "task"), plan["summary"], risk_tier, task_success)
+
+            # Record task manager transition & emit telemetry trace (P4 & P6)
+            final_task_state = TaskState.VERIFIED if task_success else TaskState.FAILED
+            task_manager.transition_state(
+                task_rec.task_id, 
+                final_task_state, 
+                reason=speech_response,
+                result_cache={"success": task_success, "summary": plan["summary"], "speech": speech_response}
+            )
+            
+            trace_data = tracer.finish()
+            yield {
+                "type": "LOG_STEP",
+                "step": "TELEMETRY",
+                "title": f"End-to-End Latency Telemetry ({trace_data['total_latency_ms']}ms)",
+                "description": f"Target budget: {trace_data['target_budget']}. Total pipeline duration: {trace_data['total_latency_ms']}ms.",
+                "payload": trace_data
+            }
 
     def _execute_plan_tools(self, plan: Dict[str, Any], screen_context: Any) -> Dict[str, Any]:
         # Hardcoded demo intents (book_movie, order_food) have been removed.

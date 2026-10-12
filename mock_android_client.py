@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 import hashlib
@@ -5,7 +6,8 @@ import time
 import websockets
 
 async def mock_client():
-    uri = "ws://localhost:8000/ws/agent?token=prod_token_xyz_2026"
+    token = os.getenv("DEVICE_TOKEN", "dev_token_nexus_01")
+    uri = f"ws://localhost:8000/ws/agent?token={token}"
     print(f"Connecting to {uri}...")
     
     try:
@@ -26,7 +28,7 @@ async def mock_client():
                         print(f"\n[RECEIVED COMMAND] {action}")
                         
                         # Simulate physical gesture and UI transition delay
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(0.3)
                         
                         # Generate a mock screen observation based on the action
                         action_name = action.get("action_type", "OBSERVE")
@@ -52,7 +54,8 @@ async def mock_client():
                             "command_id": command_id,
                             "task_id": task_id,
                             "sequence": sequence,
-                            "status": "VERIFIED",
+                            "status": "DISPATCHED",
+                            "execution_status": "DISPATCHED",
                             "screen_fingerprint": fingerprint,
                             "observation": {
                                 "foreground_package": "com.mock.app",
@@ -60,8 +63,27 @@ async def mock_client():
                             }
                         }
                         
-                        print(f"[SENDING RESULT] VERIFIED (Fingerprint: {fingerprint[:8]})")
+                        print(f"[SENDING RESULT] DISPATCHED (Fingerprint: {fingerprint[:8]})")
                         await websocket.send(json.dumps(result))
+
+                    elif payload.get("type") in ("HIGH_RISK_PROMPT", "FINANCIAL_AUTH_REQUIRED"):
+                        task_id = payload.get("task_id") or payload.get("plan", {}).get("task_id")
+                        token = payload.get("token") or payload.get("plan", {}).get("token")
+                        amount = payload.get("amount") or payload.get("plan", {}).get("amount", "$0.00")
+                        print(f"\n[RECEIVED HIGH_RISK_PROMPT] Task: {task_id}, Token: {token}")
+                        # Simulate physical biometric fingerprint authorization
+                        await asyncio.sleep(0.1)
+                        auth_result = {
+                            "type": "BIOMETRIC_AUTH_RESULT",
+                            "task_id": task_id,
+                            "token": token,
+                            "status": "APPROVED",
+                            "amount": amount,
+                            "action": "Authorized Transaction",
+                            "signature": "mock_biometric_signature_approved"
+                        }
+                        await websocket.send(json.dumps(auth_result))
+                        print(f"[SENT BIOMETRIC_AUTH_RESULT] APPROVED for Task {task_id}")
                 
                 except websockets.exceptions.ConnectionClosed:
                     print("Server closed connection.")

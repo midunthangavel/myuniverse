@@ -40,6 +40,10 @@ from .progressor import task_progressor
 from .explorer import app_explorer
 from .app_memory import app_specific_memory
 from .financial_gate import financial_gate
+from .capabilities import capability_registry
+from .task_manager import task_manager, TaskState
+from .fastpath_router import fastpath_router
+import time
 
 from .device import (
     device_factory,
@@ -56,6 +60,7 @@ from .vlm_perception import vlm_engine
 from .scheduler import scheduler_daemon
 from .saga import saga_engine
 from .showcase import showcase_runner
+from .first_party_services import food_service, messages_service, calendar_service, tasks_service
 
 app = FastAPI(
     title="Synapse AI — Agent Intelligence Engine",
@@ -63,28 +68,52 @@ app = FastAPI(
     version="1.6.0"
 )
 
-# Secure CORS for production
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+# Secure CORS configuration
+raw_origins = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+)
+allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# API Authentication Middleware
+# Fail-closed API Authentication Enforcement
+EXPECTED_API_KEY = os.getenv("SYNAPSE_API_KEY")
+if not EXPECTED_API_KEY:
+    raise RuntimeError("CRITICAL SECURITY ERROR: SYNAPSE_API_KEY must be configured in environment (.env)!")
+
+# Publicly accessible routes that bypass API Key middleware
+PUBLIC_ROUTES = {"/api/health", "/docs", "/openapi.json", "/redoc", "/api/showcase/run", "/api/showcase/steps"}
+
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    # Enforce auth on all API routes except health check
-    if request.url.path.startswith("/api/") and request.url.path != "/api/health":
+    # Allow CORS preflight requests unconditionally
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Enforce auth on all API routes except explicitly public endpoints
+    if request.url.path.startswith("/api/"):
+        if request.url.path in PUBLIC_ROUTES:
+            return await call_next(request)
+            
         api_key = request.headers.get("X-API-Key")
-        expected_key = os.getenv("SYNAPSE_API_KEY", "dev-synapse-secret-key-2026")
-        if api_key != expected_key:
+        if not api_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized: Missing X-API-Key authentication header."}
+            )
+        if api_key != EXPECTED_API_KEY:
             return JSONResponse(
                 status_code=403, 
-                content={"detail": "Forbidden: Invalid or missing X-API-Key authentication header."}
+                content={"detail": "Forbidden: Invalid X-API-Key authentication header."}
             )
+            
     return await call_next(request)
 
 memory_store = MemoryStore()
@@ -189,6 +218,36 @@ def list_tools_endpoint():
 @app.post("/api/tools/execute")
 def execute_tool_endpoint(req: ToolExecuteRequest):
     return execute_tool(req.name, req.params)
+
+# ==========================================
+# REST API: Standard Capability Contracts (P3 & P6)
+# ==========================================
+@app.get("/api/capabilities")
+def list_capabilities_endpoint():
+    caps = capability_registry.list_all()
+    return {
+        "total_capabilities": len(caps),
+        "capabilities": caps
+    }
+
+@app.get("/api/capabilities/{name}")
+def get_capability_endpoint(name: str):
+    cap = capability_registry.get(name)
+    if not cap:
+        raise HTTPException(status_code=404, detail=f"Capability '{name}' not found")
+    return {
+        "name": cap.name,
+        "description": cap.description,
+        "risk_level": cap.risk_level.value,
+        "schema": cap.input_schema.model_json_schema()
+    }
+
+@app.get("/api/tasks/{task_id}")
+def get_task_status_endpoint(task_id: str):
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task.dict()
 
 # ==========================================
 # REST API: YAML Prompt Templates (Module 1.3)
@@ -925,12 +984,184 @@ async def run_task(req: TaskRequest):
     return {"success": True, "events": events}
 
 # ==========================================
+# REST API: Capabilities & Task State Machine
+# ==========================================
+@app.get("/api/capabilities")
+def list_capabilities_endpoint():
+    return capability_registry.list_capabilities()
+
+@app.get("/api/capabilities/{name}")
+def get_capability_endpoint(name: str):
+    cap = capability_registry.get(name)
+    if not cap:
+        raise HTTPException(status_code=404, detail=f"Capability '{name}' not found")
+    return {
+        "name": cap.name,
+        "description": cap.description,
+        "risk_level": cap.risk_level.value,
+        "schema": cap.input_schema.schema()
+    }
+
+@app.get("/api/tasks/{task_id}")
+def get_task_status_endpoint(task_id: str):
+    rec = task_manager.get_task(task_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return rec.dict()
+
+# ==========================================
+# REST API: First-Party Native Services Engine
+# ==========================================
+@app.get("/api/services/food/restaurants")
+def get_restaurants():
+    return food_service.list_restaurants()
+
+@app.get("/api/services/food/cart")
+def get_food_cart(tenant_id: str = "tenant_primary"):
+    return food_service.get_cart(tenant_id)
+
+class AddToCartRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+    item_id: str
+    quantity: int = 1
+
+@app.post("/api/services/food/cart")
+def add_to_food_cart(req: AddToCartRequest):
+    return food_service.add_to_cart(req.tenant_id or "tenant_primary", req.item_id, req.quantity)
+
+class FoodCheckoutRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+    address: Optional[str] = "742 Evergreen Terrace"
+
+@app.post("/api/services/food/checkout")
+def checkout_food_cart(req: FoodCheckoutRequest):
+    return food_service.checkout(req.tenant_id or "tenant_primary", req.address or "742 Evergreen Terrace")
+
+@app.get("/api/services/messages/threads")
+def get_message_threads(tenant_id: str = "tenant_primary"):
+    return messages_service.get_threads(tenant_id)
+
+class SendMessageRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+    recipient: str
+    body: str
+
+@app.post("/api/services/messages/send")
+def send_message_endpoint(req: SendMessageRequest):
+    return messages_service.send_message(req.tenant_id or "tenant_primary", req.recipient, req.body)
+
+@app.get("/api/services/calendar/events")
+def get_calendar_events(tenant_id: str = "tenant_primary"):
+    return calendar_service.list_events(tenant_id)
+
+class CreateCalendarEventRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+    title: str
+    start_time: str
+    duration_minutes: int = 60
+    location: Optional[str] = ""
+    attendees: Optional[List[str]] = None
+
+@app.post("/api/services/calendar/events")
+def create_calendar_event(req: CreateCalendarEventRequest):
+    return calendar_service.create_event(
+        tenant_id=req.tenant_id or "tenant_primary",
+        title=req.title,
+        start_time=req.start_time,
+        duration_minutes=req.duration_minutes,
+        location=req.location or "",
+        attendees=req.attendees or []
+    )
+
+@app.get("/api/services/tasks")
+def list_tasks_endpoint(tenant_id: str = "tenant_primary", completed: Optional[bool] = None):
+    return tasks_service.list_tasks(tenant_id, completed=completed)
+
+class CreateTaskRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+    title: str
+    due_date: Optional[str] = ""
+    priority: Optional[str] = "NORMAL"
+
+@app.post("/api/services/tasks")
+def create_task_endpoint(req: CreateTaskRequest):
+    return tasks_service.create_task(
+        tenant_id=req.tenant_id or "tenant_primary",
+        title=req.title,
+        due_date=req.due_date or "",
+        priority=req.priority or "NORMAL"
+    )
+
+@app.post("/api/services/tasks/{task_id}/complete")
+def complete_task_endpoint(task_id: str, tenant_id: str = "tenant_primary"):
+    return tasks_service.complete_task(tenant_id, task_id)
+
+# ==========================================
+# REST API: FastPath & Governance Testing
+# ==========================================
+class FastPathEvalRequest(BaseModel):
+    prompt: str
+
+@app.post("/api/fastpath/evaluate")
+def evaluate_fastpath_endpoint(req: FastPathEvalRequest):
+    start_t = time.perf_counter()
+    res = fastpath_router.route(req.prompt)
+    latency_ms = (time.perf_counter() - start_t) * 1000.0
+    return {
+        "is_matched": res.is_matched,
+        "intent": res.intent,
+        "slots": res.slots,
+        "direct_speech": res.direct_speech,
+        "latency_ms": round(latency_ms, 3),
+        "meets_budget": latency_ms < 1500.0
+    }
+
+class GovernanceEvalRequest(BaseModel):
+    task_id: str
+    action: str
+    amount: Optional[str] = None
+    user_id: Optional[str] = "tenant_primary"
+
+@app.post("/api/governance/evaluate")
+def evaluate_governance_endpoint(req: GovernanceEvalRequest):
+    return financial_gate.evaluate_transaction(
+        task_id=req.task_id,
+        action=req.action,
+        amount=req.amount,
+        user_id=req.user_id or "tenant_primary"
+    )
+
+# ==========================================
+# REST API: Investor Demo Showcase Runner
+# ==========================================
+class ShowcaseRunRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+
+@app.get("/api/showcase/run")
+@app.post("/api/showcase/run")
+async def run_showcase_endpoint(req: Optional[ShowcaseRunRequest] = None):
+    tenant = req.tenant_id if req and req.tenant_id else "tenant_primary"
+    events = []
+    async for event in showcase_runner.run_live_showcase(tenant):
+        events.append(event)
+    return {"success": True, "events": events}
+
+@app.get("/api/showcase/steps")
+async def get_showcase_steps_endpoint():
+    events = []
+    async for event in showcase_runner.run_live_showcase("tenant_primary"):
+        events.append(event)
+    return {"success": True, "steps": events, "total": len(events)}
+
+# ==========================================
 # WebSockets: Real-time Streaming Agent Loop
 # ==========================================
 @app.websocket("/ws/agent")
 async def websocket_agent_endpoint(websocket: WebSocket):
     token = websocket.query_params.get("token") or websocket.headers.get("X-API-Key")
     identity = device_gateway.authenticate_device(token)
+    if not identity and token == EXPECTED_API_KEY:
+        identity = {"device_id": "web_simulator", "tenant_id": "tenant_primary"}
     
     if not identity:
         await websocket.close(code=1008, reason="Unauthorized Device")
@@ -974,9 +1205,68 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 asyncio.create_task(run_the_task())
                 continue
 
+            elif msg_type == "BIOMETRIC_AUTH_RESULT":
+                task_id = payload.get("task_id", "")
+                token = payload.get("token", "")
+                status = payload.get("status", "REJECTED")
+                amount = payload.get("amount", "")
+                action = payload.get("action", "")
+                reason = payload.get("reason", "")
+                user_id = tenant_id
+
+                if status == "APPROVED":
+                    auth_res = financial_gate.authorize_transaction(token_str=token, task_id=task_id, user_id=user_id)
+                    if auth_res.get("success"):
+                        speech = f"Biometric Authorization Verified! Executing {action or 'action'}."
+                        audio_uri = None
+                        try:
+                            audio_uri = await tts_engine.generate_audio_base64(speech)
+                        except Exception as e:
+                            print(f"TTS error on biometric approve: {e}")
+
+                        task_manager.update_task_state(task_id, TaskState.AUTHORIZED, {"token": token, "authorized_at": auth_res.get("authorized_at")})
+
+                        await websocket.send_json({
+                            "type": "ACTION_CONFIRMED",
+                            "task_id": task_id,
+                            "status": "AUTHORIZED",
+                            "summary": action,
+                            "speech": speech,
+                            "audio_data_uri": audio_uri
+                        })
+                    else:
+                        await websocket.send_json({
+                            "type": "AUTH_FAILED",
+                            "task_id": task_id,
+                            "status": "REJECTED",
+                            "reason": auth_res.get("reason", "INVALID_TOKEN")
+                        })
+                else:
+                    financial_gate.decline_transaction(task_id=task_id, user_id=user_id, reason=reason or "User biometric declined")
+                    task_manager.update_task_state(task_id, TaskState.FAILED, {"reason": "BIOMETRIC_DECLINED"})
+                    await websocket.send_json({
+                        "type": "AUTH_FAILED",
+                        "task_id": task_id,
+                        "status": "DECLINED",
+                        "reason": reason or "User biometric declined"
+                    })
+
             elif msg_type == "CONFIRM_ACTION":
                 plan = payload.get("plan", {})
                 user_id = tenant_id
+                task_id = plan.get("task_id", "")
+                token = plan.get("token", "")
+
+                # If cryptographic token is present, strictly verify through governance gate
+                if token and task_id:
+                    auth_res = financial_gate.authorize_transaction(token_str=token, task_id=task_id, user_id=user_id)
+                    if not auth_res.get("success"):
+                        await websocket.send_json({
+                            "type": "AUTH_FAILED",
+                            "task_id": task_id,
+                            "reason": auth_res.get("reason", "INVALID_TOKEN")
+                        })
+                        continue
 
                 memory_store.log_action_audit(
                     user_id,
