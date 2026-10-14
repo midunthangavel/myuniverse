@@ -651,6 +651,51 @@ class CalendarService:
                 "created_at": r["created_at"]
             }
 
+    def reschedule_event(
+        self,
+        tenant_id: str,
+        event_id: str,
+        new_start_time: str,
+        new_duration_minutes: Optional[int] = None
+    ) -> Dict[str, Any]:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM first_party_calendar_events WHERE tenant_id = ? AND id = ?",
+                (tenant_id, event_id)
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                return {"success": False, "error": f"Event '{event_id}' not found"}
+
+            duration = new_duration_minutes if new_duration_minutes is not None else existing["duration_minutes"]
+
+            cursor.execute(
+                """
+                UPDATE first_party_calendar_events
+                SET start_time = ?, duration_minutes = ?
+                WHERE tenant_id = ? AND id = ?
+                """,
+                (new_start_time, duration, tenant_id, event_id)
+            )
+            conn.commit()
+
+        updated_event = self.get_event(tenant_id, event_id)
+        return {"success": True, "rescheduled": True, "event": updated_event}
+
+    def delete_event(self, tenant_id: str, event_id: str) -> Dict[str, Any]:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM first_party_calendar_events WHERE tenant_id = ? AND id = ?",
+                (tenant_id, event_id)
+            )
+            deleted = cursor.rowcount > 0
+            conn.commit()
+
+        return {"success": deleted, "deleted_id": event_id}
+
+
 
 # ==========================================
 # 4. Synapse Tasks Service

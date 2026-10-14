@@ -938,8 +938,243 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ==========================================
+  // Proactive Morning Briefing & Schedule Optimizer Controller
+  // ==========================================
+  const tabBtnBriefing = document.getElementById('tab-btn-briefing');
+  const btnTriggerBriefing = document.getElementById('btn-trigger-briefing');
+  const btnRefreshBriefing = document.getElementById('btn-refresh-briefing');
+  const btnPlayBriefingAudio = document.getElementById('btn-play-briefing-audio');
+  const briefingAudioLabel = document.getElementById('briefing-audio-label');
+
+  const bEventsCount = document.getElementById('b-events-count');
+  const bConflictsCount = document.getElementById('b-conflicts-count');
+  const bTasksCount = document.getElementById('b-tasks-count');
+  const bRecsCount = document.getElementById('b-recs-count');
+  const briefingSpeechText = document.getElementById('briefing-speech-text');
+  const briefingTimestamp = document.getElementById('briefing-timestamp');
+  const briefingTimelineList = document.getElementById('briefing-timeline-list');
+  const briefingRecsList = document.getElementById('briefing-recs-list');
+  const briefingBadge = document.getElementById('briefing-badge');
+
+  let activeBriefingAudio = null;
+  let cachedBriefingData = null;
+
+  async function loadMorningBriefing(includeAudio = false) {
+    try {
+      if (briefingSpeechText) {
+        briefingSpeechText.innerHTML = '<span style="color:#fbbf24;">Analyzing calendar events, task deadlines, and travel buffers across SQLite...</span>';
+      }
+
+      const res = await fetch(`http://127.0.0.1:8000/api/proactive/briefing?include_audio=${includeAudio}`, {
+        headers: {
+          'X-API-Key': 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026',
+          'X-Tenant-ID': 'tenant_primary'
+        }
+      });
+      const data = await res.json();
+      cachedBriefingData = data;
+
+      // Update Header & Speech
+      if (briefingSpeechText) briefingSpeechText.textContent = data.speech_text || 'Briefing ready.';
+      if (briefingTimestamp) {
+        const timeStr = new Date(data.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        briefingTimestamp.textContent = `Generated at ${timeStr}`;
+      }
+
+      // Update Metrics
+      const stats = data.summary_stats || {};
+      if (bEventsCount) bEventsCount.textContent = stats.events_count ?? 0;
+      if (bConflictsCount) bConflictsCount.textContent = stats.conflicts_count ?? 0;
+      if (bTasksCount) bTasksCount.textContent = stats.pending_tasks_count ?? 0;
+      if (bRecsCount) bRecsCount.textContent = stats.recommendations_count ?? 0;
+
+      // Update Tab Badge
+      if (briefingBadge) {
+        if (stats.conflicts_count > 0) {
+          briefingBadge.textContent = `${stats.conflicts_count} Conflict${stats.conflicts_count > 1 ? 's' : ''}`;
+          briefingBadge.style.background = 'rgba(239, 68, 68, 0.25)';
+          briefingBadge.style.color = '#f87171';
+        } else {
+          briefingBadge.textContent = 'Optimized';
+          briefingBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+          briefingBadge.style.color = '#10b981';
+        }
+      }
+
+      // Render Timeline
+      if (briefingTimelineList) {
+        briefingTimelineList.innerHTML = '';
+        const timeline = data.timeline || [];
+        if (timeline.length === 0) {
+          briefingTimelineList.innerHTML = '<div style="color:var(--text-muted); font-size:0.8rem; padding:12px;">No scheduled events today.</div>';
+        } else {
+          timeline.forEach(ev => {
+            const card = document.createElement('div');
+            card.className = `timeline-item-card ${ev.has_conflict ? 'conflict' : ''} ${ev.tight_buffer ? 'tight-buffer' : ''}`;
+            
+            let badgeHtml = '';
+            if (ev.has_conflict) {
+              badgeHtml = `<span class="timeline-badge conflict">⚠️ Conflict Detected</span>`;
+            } else if (ev.tight_buffer) {
+              badgeHtml = `<span class="timeline-badge tight">🚗 Tight Buffer</span>`;
+            }
+
+            card.innerHTML = `
+              <div class="timeline-item-top">
+                <span class="timeline-item-time">${ev.start_time} - ${ev.end_time_str}</span>
+                ${badgeHtml}
+              </div>
+              <div class="timeline-item-title">${ev.title}</div>
+              <div class="timeline-item-loc">📍 ${ev.location || 'Online'} • ⏱️ ${ev.duration_minutes}m</div>
+              ${ev.conflict_details ? `<div style="font-size:0.72rem; color:#f87171; margin-top:2px;">⚠️ ${ev.conflict_details}</div>` : ''}
+            `;
+            briefingTimelineList.appendChild(card);
+          });
+        }
+      }
+
+      // Render Recommendations
+      if (briefingRecsList) {
+        briefingRecsList.innerHTML = '';
+        const recs = data.recommendations || [];
+        if (recs.length === 0) {
+          briefingRecsList.innerHTML = '<div style="color:var(--text-muted); font-size:0.8rem; padding:12px;">All agenda items and meal slots are optimized!</div>';
+        } else {
+          recs.forEach(rec => {
+            const card = document.createElement('div');
+            card.className = 'rec-card';
+            card.innerHTML = `
+              <div class="rec-card-top">
+                <span class="rec-category-badge">${rec.category.replace('_', ' ')}</span>
+                <span style="font-size:0.65rem; color:var(--text-muted);">Risk: ${rec.risk_tier}</span>
+              </div>
+              <h5 class="rec-title">${rec.title}</h5>
+              <p class="rec-impact">${rec.impact}</p>
+              <button class="rec-apply-btn" id="btn-apply-${rec.rec_id}">
+                <span>⚡</span> Apply Recommendation
+              </button>
+            `;
+
+            const applyBtn = card.querySelector(`#btn-apply-${rec.rec_id}`);
+            if (applyBtn) {
+              applyBtn.addEventListener('click', async () => {
+                applyBtn.disabled = true;
+                applyBtn.innerHTML = '<span>⏳</span> Applying...';
+
+                try {
+                  const actRes = await fetch('http://127.0.0.1:8000/api/proactive/briefing/apply-action', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-API-Key': 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026',
+                      'X-Tenant-ID': 'tenant_primary'
+                    },
+                    body: JSON.stringify({
+                      rec_id: rec.rec_id,
+                      action_type: rec.action_type,
+                      payload: rec.action_payload,
+                      tenant_id: 'tenant_primary'
+                    })
+                  });
+                  const actData = await actRes.json();
+
+                  if (actData.success) {
+                    applyBtn.className = 'rec-apply-btn applied';
+                    applyBtn.innerHTML = '<span>✅</span> Applied';
+
+                    agent.logStep(
+                      'PROACTIVE_ACTION',
+                      `Executed Proactive Optimization: ${rec.title}`,
+                      actData.message || 'Updated first-party database state natively.',
+                      actData
+                    );
+
+                    // Refresh phone simulator view if active
+                    if (phone && phone.renderCurrentApp) {
+                      phone.renderCurrentApp();
+                    }
+
+                    // Reload briefing in background
+                    setTimeout(() => loadMorningBriefing(false), 800);
+                  } else {
+                    applyBtn.disabled = false;
+                    applyBtn.innerHTML = '<span>❌</span> Failed';
+                  }
+                } catch (err) {
+                  console.error('Error applying recommendation:', err);
+                  applyBtn.disabled = false;
+                  applyBtn.innerHTML = '<span>❌</span> Error';
+                }
+              });
+            }
+
+            briefingRecsList.appendChild(card);
+          });
+        }
+      }
+
+      // Handle Audio playback if returned
+      if (data.audio_data_uri) {
+        if (activeBriefingAudio) {
+          activeBriefingAudio.pause();
+        }
+        activeBriefingAudio = new Audio(data.audio_data_uri);
+        if (briefingAudioLabel) briefingAudioLabel.textContent = 'Playing Briefing...';
+        
+        activeBriefingAudio.onended = () => {
+          if (briefingAudioLabel) briefingAudioLabel.textContent = 'Listen (Edge-TTS)';
+        };
+
+        activeBriefingAudio.play().catch(e => console.log('Audio autoplay prevented:', e));
+      }
+
+      return data;
+    } catch (e) {
+      console.error('Error loading morning briefing:', e);
+      if (briefingSpeechText) {
+        briefingSpeechText.innerHTML = '<span style="color:#ef4444;">Failed to load morning briefing from backend.</span>';
+      }
+    }
+  }
+
+  // Briefing Listen Button
+  if (btnPlayBriefingAudio) {
+    btnPlayBriefingAudio.addEventListener('click', () => {
+      if (activeBriefingAudio && !activeBriefingAudio.paused) {
+        activeBriefingAudio.pause();
+        if (briefingAudioLabel) briefingAudioLabel.textContent = 'Listen (Edge-TTS)';
+      } else {
+        loadMorningBriefing(true);
+      }
+    });
+  }
+
+  // Briefing Refresh Button
+  if (btnRefreshBriefing) {
+    btnRefreshBriefing.addEventListener('click', () => loadMorningBriefing(false));
+  }
+
+  // Trigger from top Scenario Chip
+  if (btnTriggerBriefing) {
+    btnTriggerBriefing.addEventListener('click', () => {
+      if (tabBtnBriefing) tabBtnBriefing.click();
+      loadMorningBriefing(false);
+    });
+  }
+
+  // Tab click listener
+  if (tabBtnBriefing) {
+    tabBtnBriefing.addEventListener('click', () => {
+      if (!cachedBriefingData) {
+        loadMorningBriefing(false);
+      }
+    });
+  }
+
   // Welcome announcement
   setTimeout(() => {
     character.setSpeech('Welcome! I am Synapse. I am connected to your physical Redmi Note 10S! Try the real phone scenario buttons or inspect the new App Explorer tab!');
   }, 500);
 });
+

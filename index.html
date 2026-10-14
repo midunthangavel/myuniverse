@@ -50,6 +50,9 @@
         <button class="scenario-chip" data-scenario="meeting" id="btn-scenario-meeting">
           📅 “Schedule with John”
         </button>
+        <button class="scenario-chip briefing-chip" id="btn-trigger-briefing" title="Generate Proactive Morning Briefing & Schedule Analysis">
+          ☀️ Morning Briefing
+        </button>
 
         <span class="proactive-divider">|</span>
         <span class="scenarios-label proactive">🚨 Ambient Radar:</span>
@@ -330,6 +333,11 @@
             <span class="tab-icon">🧭</span>
             <span>App Explorer & Vector Memory</span>
             <span class="badge-count" id="explorer-badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8;">ChromaDB</span>
+          </button>
+          <button class="brain-tab" data-tab="briefing" id="tab-btn-briefing">
+            <span class="tab-icon">☀️</span>
+            <span>Morning Briefing</span>
+            <span class="badge-count" id="briefing-badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">Autonomous</span>
           </button>
         </div>
 
@@ -811,6 +819,92 @@
             </div>
           </div>
         </div>
+
+        <!-- TAB 6: Proactive Morning Briefing & Schedule Optimizer Engine -->
+        <div class="tab-content" id="tab-briefing">
+          <div class="briefing-engine-header">
+            <div class="briefing-intro">
+              <div class="arch-badge-row">
+                <span class="arch-pill laya">Ambient Intelligence</span>
+                <span class="arch-pill viking">SQLite Persistence</span>
+                <span class="arch-pill scrapling">Zero-Click Routing</span>
+              </div>
+              <h3>☀️ Proactive Morning Briefing & Schedule Optimizer</h3>
+              <p>Autonomous ambient intelligence sweeping over your first-party SQLite database. Detects meeting collisions, calculates transit buffers, triages high-priority tasks, and proposes 1-click native capability executions.</p>
+            </div>
+            
+            <div class="briefing-top-actions">
+              <button class="btn secondary" id="btn-play-briefing-audio">
+                <span class="btn-icon">🔊</span>
+                <span id="briefing-audio-label">Listen (Edge-TTS)</span>
+              </button>
+              <button class="btn primary" id="btn-refresh-briefing">
+                <span class="btn-icon">🔄</span>
+                <span>Refresh Briefing</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Briefing Speech Banner -->
+          <div class="briefing-speech-card" id="briefing-speech-card">
+            <div class="speech-avatar">☀️</div>
+            <div class="speech-body">
+              <div class="speech-header">
+                <span class="speech-tag">NOVA AMBIENT NARRATION</span>
+                <span class="speech-time" id="briefing-timestamp">Just now</span>
+              </div>
+              <p class="speech-text" id="briefing-speech-text">
+                Good morning! Loading your live schedule, checking for overlapping meetings, and triaging your high-priority tasks...
+              </p>
+            </div>
+          </div>
+
+          <!-- Briefing Metric Stats -->
+          <div class="briefing-metrics-row">
+            <div class="b-metric">
+              <span class="b-val" id="b-events-count">0</span>
+              <span class="b-lbl">Scheduled Events</span>
+            </div>
+            <div class="b-metric warn" id="b-metric-conflicts">
+              <span class="b-val" id="b-conflicts-count">0</span>
+              <span class="b-lbl">Conflicts Detected</span>
+            </div>
+            <div class="b-metric">
+              <span class="b-val" id="b-tasks-count">0</span>
+              <span class="b-lbl">Pending Tasks</span>
+            </div>
+            <div class="b-metric highlight">
+              <span class="b-val" id="b-recs-count">0</span>
+              <span class="b-lbl">Proactive Actions</span>
+            </div>
+          </div>
+
+          <!-- Two-Column Briefing Grid: Timeline & Recommendations -->
+          <div class="briefing-content-grid">
+            <!-- Left: Today's Agenda -->
+            <div class="briefing-panel agenda-panel">
+              <div class="panel-subhead">
+                <h4>📅 Today's Chronological Agenda</h4>
+                <span class="subhead-pill" id="briefing-agenda-pill">Live SQLite State</span>
+              </div>
+              <div class="timeline-list" id="briefing-timeline-list">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Right: Actionable Recommendations -->
+            <div class="briefing-panel recs-panel">
+              <div class="panel-subhead">
+                <h4>💡 Autonomous Recommendations</h4>
+                <span class="subhead-pill highlight" id="briefing-recs-pill">1-Click Native Actions</span>
+              </div>
+              <div class="recs-list" id="briefing-recs-list">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+          </div>
+        </div>
+
 
       </section>
     </main>

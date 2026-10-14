@@ -1171,8 +1171,44 @@ def plan_orchestration_endpoint(prompt: str, request: Request, tenant_id: Option
     return plan.dict()
 
 # ==========================================
+# REST API: Proactive Morning Briefing & Schedule Optimizer
+# ==========================================
+from .proactive_briefing import proactive_briefing_engine
+
+class ApplyBriefingActionRequest(BaseModel):
+    rec_id: str
+    action_type: str
+    payload: Dict[str, Any]
+    tenant_id: Optional[str] = None
+
+@app.get("/api/proactive/briefing")
+async def get_proactive_briefing_endpoint(
+    request: Request,
+    tenant_id: Optional[str] = None,
+    include_audio: bool = False
+):
+    tenant = resolve_tenant(request, tenant_id)
+    return await proactive_briefing_engine.generate_briefing(tenant, include_audio=include_audio)
+
+@app.post("/api/proactive/briefing/optimize")
+def analyze_schedule_endpoint(request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return proactive_briefing_engine.analyze_schedule(tenant)
+
+@app.post("/api/proactive/briefing/apply-action")
+def apply_briefing_action_endpoint(req: ApplyBriefingActionRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
+    return proactive_briefing_engine.apply_recommendation(
+        tenant_id=tenant,
+        rec_id=req.rec_id,
+        action_type=req.action_type,
+        payload=req.payload
+    )
+
+# ==========================================
 # REST API: FastPath & Governance Testing
 # ==========================================
+
 class FastPathEvalRequest(BaseModel):
     prompt: str
 
