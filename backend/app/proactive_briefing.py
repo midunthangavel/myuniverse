@@ -86,7 +86,8 @@ class ProactiveBriefingEngine:
                 start_time="02:00 PM",
                 duration_minutes=60,
                 location="Online (Google Meet)",
-                attendees=["lead_dev@company.com", "alex@company.com"]
+                attendees=["lead_dev@company.com", "alex@company.com"],
+                allow_overlap=True
             )
 
         tasks = tasks_service.list_tasks(tenant_id, completed=False)

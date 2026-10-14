@@ -4,19 +4,13 @@
  * renders UI, and generates the Accessibility Node Hierarchy for screen grounding.
  */
 
+import { authFetch } from './auth.js';
+
 const API_BASE = 'http://127.0.0.1:8000';
-const API_KEY = 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026';
 
 async function fetchService(endpoint, options = {}) {
   try {
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
-      headers: {
-        'X-API-Key': API_KEY,
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      }
-    });
+    const res = await authFetch(`${API_BASE}${endpoint}`, options);
     if (!res.ok) return null;
     return await res.json();
   } catch (e) {

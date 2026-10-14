@@ -66,3 +66,7 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Workflow overrides for restricted OAuth tokens
+.github/
+

@@ -15,10 +15,40 @@ import sqlite3
 import json
 import time
 import uuid
+import re
+import datetime
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "synapse_memory.db")
+
+VALID_TASK_PRIORITIES = {"LOW", "NORMAL", "HIGH", "URGENT"}
+
+def parse_time_to_minutes(time_str: str) -> Optional[int]:
+    """Parses time strings (ISO datetime, 12h AM/PM, or 24h) to minutes from midnight for interval overlap reasoning."""
+    if not time_str or not isinstance(time_str, str):
+        return None
+    time_str = time_str.strip()
+    # 1. Full datetime formats
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+        try:
+            dt = datetime.datetime.strptime(time_str, fmt)
+            return dt.hour * 60 + dt.minute
+        except Exception:
+            pass
+    # 2. 12-hour AM/PM or 24h formats
+    clean = time_str.upper()
+    m = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)?", clean)
+    if m:
+        hr = int(m.group(1))
+        mn = int(m.group(2))
+        period = m.group(3)
+        if period == "PM" and hr < 12:
+            hr += 12
+        elif period == "AM" and hr == 12:
+            hr = 0
+        return hr * 60 + mn
+    return None
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -206,6 +236,9 @@ class FoodService:
         return r.dict() if r else None
 
     def add_to_cart(self, tenant_id: str, item_id: str, quantity: int = 1) -> Dict[str, Any]:
+        if not isinstance(quantity, int) or quantity <= 0:
+            return {"success": False, "error": "Quantity must be a positive integer"}
+
         # Find item across menus
         matched_item = None
         for rest in self.restaurants.values():
@@ -535,7 +568,8 @@ class CalendarService:
         duration_minutes: int = 60,
         location: str = "",
         attendees: Optional[List[str]] = None,
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
+        allow_overlap: bool = False
     ) -> Dict[str, Any]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -563,24 +597,54 @@ class CalendarService:
                         }
                     }
 
-            # Conflict detection for same tenant and start_time
-            cursor.execute(
-                "SELECT * FROM first_party_calendar_events WHERE tenant_id = ? AND start_time = ?",
-                (tenant_id, start_time)
-            )
-            conflict_row = cursor.fetchone()
-            if conflict_row:
-                return {
-                    "success": False,
-                    "conflict": True,
-                    "conflicting_event": {
-                        "id": conflict_row["id"],
-                        "tenant_id": conflict_row["tenant_id"],
-                        "title": conflict_row["title"],
-                        "start_time": conflict_row["start_time"]
-                    },
-                    "error": f"Conflict detected with existing event: '{conflict_row['title']}' at {start_time}"
-                }
+            # Conflict & Interval Overlap detection
+            if not allow_overlap:
+                cursor.execute(
+                    "SELECT * FROM first_party_calendar_events WHERE tenant_id = ? AND start_time = ?",
+                    (tenant_id, start_time)
+                )
+                conflict_row = cursor.fetchone()
+                if conflict_row:
+                    return {
+                        "success": False,
+                        "conflict": True,
+                        "conflicting_event": {
+                            "id": conflict_row["id"],
+                            "tenant_id": conflict_row["tenant_id"],
+                            "title": conflict_row["title"],
+                            "start_time": conflict_row["start_time"]
+                        },
+                        "error": f"Conflict detected with existing event: '{conflict_row['title']}' at {start_time}"
+                    }
+
+                new_start_min = parse_time_to_minutes(start_time)
+                if new_start_min is not None:
+                    new_end_min = new_start_min + duration_minutes
+                    cursor.execute(
+                        "SELECT * FROM first_party_calendar_events WHERE tenant_id = ?",
+                        (tenant_id,)
+                    )
+                    for ev in cursor.fetchall():
+                        ev_start_min = parse_time_to_minutes(ev["start_time"])
+                        if ev_start_min is not None:
+                            ev_end_min = ev_start_min + ev["duration_minutes"]
+                            overlap_start = max(new_start_min, ev_start_min)
+                            overlap_end = min(new_end_min, ev_end_min)
+                            if overlap_start < overlap_end:
+                                overlap_dur = overlap_end - overlap_start
+                                return {
+                                    "success": False,
+                                    "conflict": True,
+                                    "conflicting_event": {
+                                        "id": ev["id"],
+                                        "tenant_id": ev["tenant_id"],
+                                        "title": ev["title"],
+                                        "start_time": ev["start_time"],
+                                        "duration_minutes": ev["duration_minutes"]
+                                    },
+                                    "overlap_minutes": overlap_dur,
+                                    "error": f"Schedule collision detected: Overlaps by {overlap_dur}m with existing event '{ev['title']}' ({ev['start_time']})"
+                                }
 
             ev_id = f"cal_{uuid.uuid4().hex[:10]}"
             now = time.time()
@@ -723,6 +787,10 @@ class TasksService:
         priority: str = "NORMAL",
         idempotency_key: Optional[str] = None
     ) -> Dict[str, Any]:
+        p_clean = (priority or "NORMAL").upper().strip()
+        if p_clean not in VALID_TASK_PRIORITIES:
+            p_clean = "NORMAL"
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if idempotency_key:
@@ -753,7 +821,7 @@ class TasksService:
                 INSERT INTO first_party_tasks (id, tenant_id, title, due_date, priority, completed, created_at, idempotency_key)
                 VALUES (?, ?, ?, ?, ?, 0, ?, ?)
                 """,
-                (t_id, tenant_id, title, due_date or "", priority.upper(), now, idempotency_key)
+                (t_id, tenant_id, title, due_date or "", p_clean, now, idempotency_key)
             )
             conn.commit()
 
@@ -762,7 +830,7 @@ class TasksService:
             "tenant_id": tenant_id,
             "title": title,
             "due_date": due_date or "",
-            "priority": priority.upper(),
+            "priority": p_clean,
             "completed": False,
             "created_at": now
         }

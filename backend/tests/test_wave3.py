@@ -9,7 +9,13 @@ Automated Verification Test Suite for Wave 3 Production & Real-World:
 - Wave 3 REST Endpoints
 """
 
+import os
+import sys
 import asyncio
+
+# Ensure backend root is on sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from app.device import device_factory, UIAutomatorParser, SimulatorController
 from app.browser_agent import browser_engine
 from app.vlm_perception import vlm_engine
@@ -139,14 +145,15 @@ def test_wave3_rest_endpoints():
     print("--> Testing Wave 3 REST Endpoints...")
     from fastapi.testclient import TestClient
     client = TestClient(app)
+    headers = {"X-API-Key": "synapse_api_sec_prod_9a2b8c4d1e7f0_2026"}
 
     # Device Status
-    res = client.get("/api/device/status")
+    res = client.get("/api/device/status", headers=headers)
     assert res.status_code == 200
     assert "active_device_type" in res.json()
 
     # Device Tap
-    res = client.post("/api/device/tap", json={"x": 540, "y": 960})
+    res = client.post("/api/device/tap", json={"x": 540, "y": 960}, headers=headers)
     assert res.status_code == 200
     assert res.json()["success"] is True
 
@@ -154,19 +161,19 @@ def test_wave3_rest_endpoints():
     res = client.post("/api/browser/execute-flow", json={
         "url": "https://synapse.local",
         "steps": [{"action": "TAP", "target": "Explore"}]
-    })
+    }, headers=headers)
     assert res.status_code == 200
 
     # VLM status
-    res = client.get("/api/vlm/status")
+    res = client.get("/api/vlm/status", headers=headers)
     assert res.status_code == 200
 
     # Scheduler rules & trigger
-    res = client.get("/api/daemon/rules")
+    res = client.get("/api/daemon/rules", headers=headers)
     assert res.status_code == 200
-    res = client.post("/api/daemon/trigger/rule_traffic_monitor")
+    res = client.post("/api/daemon/trigger/rule_traffic_monitor", headers=headers)
     assert res.status_code == 200
-    res = client.get("/api/daemon/notifications")
+    res = client.get("/api/daemon/notifications", headers=headers)
     assert res.status_code == 200
     assert res.json()["count"] >= 1
 
@@ -175,12 +182,12 @@ def test_wave3_rest_endpoints():
         "saga_name": "Test Chain",
         "steps": [{"action": "ADD_TO_CART"}, {"action": "CHARGE_PAYMENT"}],
         "simulate_failure_at": 1
-    })
+    }, headers=headers)
     assert res.status_code == 200
     assert res.json()["status"] == "ROLLED_BACK"
 
     # Showcase steps
-    res = client.get("/api/showcase/steps")
+    res = client.get("/api/showcase/steps", headers=headers)
     assert res.status_code == 200
     assert res.json()["total_steps"] == 12
 

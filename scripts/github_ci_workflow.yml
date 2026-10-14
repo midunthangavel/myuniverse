@@ -1,0 +1,74 @@
+name: Synapse AI CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-verification:
+    runs-on: ubuntu-latest
+    env:
+      SYNAPSE_API_KEY: "synapse_api_sec_prod_9a2b8c4d1e7f0_2026"
+      SYNAPSE_GOVERNANCE_SECRET: "synapse_gov_sec_master_2026_0987654321_hmac"
+      SYNAPSE_DEVICE_TOKENS: '{"syn_dev_nexus001":{"device_id":"nexus_001","tenant_id":"tenant_primary"}}'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Run Phase 3 Stage 1 Security Acceptance Suite
+        run: |
+          python backend/tests/test_phase3_stage1_security.py
+
+      - name: Run Capability & Durable Storage Verification Suite
+        run: |
+          python backend/tests/test_durable_capabilities_and_orchestration.py
+
+      - name: Run Proactive Morning Briefing & Optimizer Suite
+        run: |
+          python backend/tests/test_proactive_briefing_engine.py
+
+      - name: Run Master Phase 2 Regression Runner (Waves 1-5)
+        run: |
+          python backend/tests/run_all_phase2_tests.py
+
+  frontend-build-and-secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm ci || npm install
+
+      - name: Build Vite Production Distribution
+        run: npm run build
+
+      - name: Verify Zero Hardcoded Secrets in Client Source and Dist
+        run: |
+          echo "Scanning src/ and dist/ for hardcoded secrets..."
+          if grep -rn "synapse_api_sec" src/ dist/; then
+            echo "SECURITY FAILURE: Master API secret leaked in client bundle!"
+            exit 1
+          fi
+          echo "PASS: Zero secrets detected in browser client."

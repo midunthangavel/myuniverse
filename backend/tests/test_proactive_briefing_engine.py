@@ -99,7 +99,8 @@ class TestProactiveBriefingEngine(unittest.TestCase):
             title="Client Presentation",
             start_time="10:30 AM",
             duration_minutes=60,
-            location="Room B"
+            location="Room B",
+            allow_overlap=True
         )
 
         analysis = proactive_briefing_engine.analyze_schedule(self.test_tenant)

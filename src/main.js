@@ -8,6 +8,7 @@ import { MemoryEngine } from './memory.js';
 import { PhoneSimulator } from './phone.js';
 import { AudioEngine } from './audio.js';
 import { AgentEngine } from './agent.js';
+import { authFetch } from './auth.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   // 1. Initialize Core Engines
@@ -492,9 +493,8 @@ document.addEventListener('DOMContentLoaded', () => {
       showcaseBtn.textContent = '⏳ Playing Showcase...';
 
       try {
-        const apiKey = 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026';
-        const res = await fetch('http://127.0.0.1:8000/api/showcase/run', {
-          headers: { 'X-API-Key': apiKey }
+        const res = await authFetch('http://127.0.0.1:8000/api/showcase/run', {
+          method: 'POST'
         });
         const data = await res.json();
         const events = data.events || data.steps || [];
@@ -966,12 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
         briefingSpeechText.innerHTML = '<span style="color:#fbbf24;">Analyzing calendar events, task deadlines, and travel buffers across SQLite...</span>';
       }
 
-      const res = await fetch(`http://127.0.0.1:8000/api/proactive/briefing?include_audio=${includeAudio}`, {
-        headers: {
-          'X-API-Key': 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026',
-          'X-Tenant-ID': 'tenant_primary'
-        }
-      });
+      const res = await authFetch(`http://127.0.0.1:8000/api/proactive/briefing?include_audio=${includeAudio}`);
       const data = await res.json();
       cachedBriefingData = data;
 
@@ -1063,18 +1058,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 applyBtn.innerHTML = '<span>⏳</span> Applying...';
 
                 try {
-                  const actRes = await fetch('http://127.0.0.1:8000/api/proactive/briefing/apply-action', {
+                  const actRes = await authFetch('http://127.0.0.1:8000/api/proactive/briefing/apply-action', {
                     method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'X-API-Key': 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026',
-                      'X-Tenant-ID': 'tenant_primary'
-                    },
                     body: JSON.stringify({
                       rec_id: rec.rec_id,
                       action_type: rec.action_type,
-                      payload: rec.action_payload,
-                      tenant_id: 'tenant_primary'
+                      payload: rec.action_payload
                     })
                   });
                   const actData = await actRes.json();

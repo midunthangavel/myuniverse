@@ -4,6 +4,8 @@
  * Supports Live Bi-directional WebSocket Streaming to FastAPI Backend
  */
 
+import { getWebSocketUrl, authFetch } from './auth.js';
+
 export class AgentEngine {
   constructor(character, memory, phone, audio) {
     this.character = character;
@@ -22,10 +24,10 @@ export class AgentEngine {
     this.initWebSocket();
   }
 
-  initWebSocket() {
+  async initWebSocket() {
     try {
-      const token = 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026';
-      this.ws = new WebSocket(`ws://127.0.0.1:8000/ws/agent?token=${encodeURIComponent(token)}`);
+      const wsUrl = await getWebSocketUrl();
+      this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         this.wsConnected = true;
@@ -325,6 +327,7 @@ export class AgentEngine {
 
     let countdownSeconds = 120;
     let timerInterval = null;
+    let cancelHandler = null;
 
     if (modal && modalTitle && modalDetails) {
       modalBadge.textContent = `${(plan.risk_tier || plan.riskTier || 'HIGH').toUpperCase()} RISK ACTION`;
@@ -361,63 +364,68 @@ export class AgentEngine {
     this.audio.playNeuralVoice(audioDataUri, speechPrompt);
 
     return new Promise((resolve) => {
-      const confirmBtn = document.getElementById('btn-confirm-action');
-      const denyBtn = document.getElementById('btn-deny-action');
-      const closeBtn = document.getElementById('btn-approval-cancel');
+        const confirmBtn = document.getElementById('btn-confirm-action');
+        const denyBtn = document.getElementById('btn-deny-action');
+        const closeBtn = document.getElementById('btn-approval-cancel');
 
-      const cleanup = () => {
-        if (timerInterval) clearInterval(timerInterval);
-        if (modal) modal.classList.add('hidden');
-      };
-
-      const cancelHandler = (reason = 'Execution aborted per user instruction.') => {
-        cleanup();
-        this.logStep('RISK', 'Action Cancelled by User', reason);
-        this.character.setState('IDLE', 'Action cancelled. What would you like to do instead?');
-        this.setPhase('Task Cancelled');
-        
-        // Notify governance gate of decline
-        try {
-          fetch('/api/governance/decline', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: plan.task_id || 'task_default', reason })
-          });
-        } catch (e) {}
-
-        resolve(false);
-      };
-
-      if (confirmBtn) {
-        confirmBtn.onclick = async () => {
-          cleanup();
-          this.logStep('ACTION', 'User Authorized Transaction', 'Cryptographic HMAC Token Verified. Triggering payment gateway...');
-          
-          const token = plan.financial_token || `tok_${Math.floor(Date.now() / 1000)}_verified`;
-          
-          // Verify with backend financial gate
-          try {
-            await fetch('/api/governance/authorize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: token, task_id: plan.task_id || 'task_default' })
-            });
-          } catch (e) {
-            console.warn('Financial gate REST notify:', e);
-          }
-
-          if (this.wsConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-              type: 'CONFIRM_ACTION',
-              plan: plan,
-              token: token
-            }));
-          }
-
-          await this.completeSuccessfulAction(plan);
-          resolve(true);
+        const cleanup = () => {
+          if (timerInterval) clearInterval(timerInterval);
+          if (modal) modal.classList.add('hidden');
         };
-      }
+
+        cancelHandler = (reason = 'Execution aborted per user instruction.') => {
+          cleanup();
+          this.logStep('RISK', 'Action Cancelled by User', reason);
+          this.character.setState('IDLE', 'Action cancelled. What would you like to do instead?');
+          this.setPhase('Task Cancelled');
+          
+          // Notify governance gate of decline
+          try {
+            authFetch('/api/governance/decline', {
+              method: 'POST',
+              body: JSON.stringify({ task_id: plan.task_id || 'task_default', reason })
+            });
+          } catch (e) {}
+
+          resolve(false);
+        };
+
+        if (confirmBtn) {
+          confirmBtn.onclick = async () => {
+            cleanup();
+            this.logStep('ACTION', 'User Authorized Transaction', 'Cryptographic Proof Verified. Triggering payment gateway...');
+            
+            const token = plan.financial_token || `tok_${Math.floor(Date.now() / 1000)}_verified`;
+            
+            // Verify with backend financial gate using session ticket
+            try {
+              await authFetch('/api/governance/authorize', {
+                method: 'POST',
+                body: JSON.stringify({
+                  token: token,
+                  task_id: plan.task_id || 'task_default',
+                  challenge_nonce: plan.challenge_nonce || null,
+                  signature: plan.signature || null
+                })
+              });
+            } catch (e) {
+              console.warn('Financial gate REST notify:', e);
+            }
+
+            if (this.wsConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({
+                type: 'CONFIRM_ACTION',
+                plan: plan,
+                token: token,
+                challenge_nonce: plan.challenge_nonce || null,
+                signature: plan.signature || null
+              }));
+            }
+
+            await this.completeSuccessfulAction(plan);
+            resolve(true);
+          };
+        }
 
       if (denyBtn) denyBtn.onclick = () => cancelHandler('User clicked Deny');
       if (closeBtn) closeBtn.onclick = () => cancelHandler('User closed modal');

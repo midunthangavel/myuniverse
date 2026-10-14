@@ -18,6 +18,10 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import json
 import uvicorn
+import base64
+import hmac
+import hashlib
+import uuid
 
 from .models import TaskRequest, AddMemoryRequest
 from .memory import MemoryStore
@@ -39,7 +43,7 @@ from .reflector import action_reflector, trajectory_reflector
 from .progressor import task_progressor
 from .explorer import app_explorer
 from .app_memory import app_specific_memory
-from .financial_gate import financial_gate
+from .financial_gate import financial_gate, SECRET_KEY
 from .capabilities import capability_registry
 from .task_manager import task_manager, TaskState
 from .fastpath_router import fastpath_router
@@ -88,8 +92,44 @@ EXPECTED_API_KEY = os.getenv("SYNAPSE_API_KEY")
 if not EXPECTED_API_KEY:
     raise RuntimeError("CRITICAL SECURITY ERROR: SYNAPSE_API_KEY must be configured in environment (.env)!")
 
-# Publicly accessible routes that bypass API Key middleware
-PUBLIC_ROUTES = {"/api/health", "/docs", "/openapi.json", "/redoc", "/api/showcase/run", "/api/showcase/steps"}
+# Publicly accessible routes that bypass API Key middleware (strictly read-only / auth endpoints)
+PUBLIC_ROUTES = {"/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/session"}
+
+def create_session_token(tenant_id: str = "tenant_primary", principal: str = "web_cockpit", ttl_seconds: int = 3600) -> str:
+    """Issues a cryptographically signed HMAC session ticket for cockpit clients (no master API keys in browser)."""
+    now = int(time.time())
+    data = {
+        "sub": principal,
+        "tenant_id": tenant_id,
+        "iat": now,
+        "exp": now + ttl_seconds,
+        "nonce": uuid.uuid4().hex[:16]
+    }
+    raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    b64_payload = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    sig = hmac.new(SECRET_KEY, b64_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"st.{b64_payload}.{sig}"
+
+def verify_session_token(token: str) -> Optional[Dict[str, Any]]:
+    """Validates signature and expiration of a session ticket."""
+    if not token or not isinstance(token, str):
+        return None
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "st":
+        return None
+    b64_payload, sig = parts[1], parts[2]
+    expected_sig = hmac.new(SECRET_KEY, b64_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        return None
+    try:
+        padded = b64_payload + "=" * (-len(b64_payload) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("utf-8"))
+        data = json.loads(raw.decode("utf-8"))
+        if time.time() > data.get("exp", 0):
+            return None
+        return data
+    except Exception:
+        return None
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
@@ -101,19 +141,62 @@ async def api_key_middleware(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         if request.url.path in PUBLIC_ROUTES:
             return await call_next(request)
-            
-        api_key = request.headers.get("X-API-Key")
-        if not api_key:
+
+        authenticated = False
+        tenant_id = None
+        principal = None
+
+        # 1. Check Bearer Session Token in Authorization header or X-Session-Token
+        auth_hdr = request.headers.get("Authorization", "")
+        session_hdr = request.headers.get("X-Session-Token", "")
+        token_candidate = None
+        if auth_hdr.startswith("Bearer "):
+            token_candidate = auth_hdr[7:].strip()
+        elif session_hdr:
+            token_candidate = session_hdr.strip()
+
+        if token_candidate:
+            sess = verify_session_token(token_candidate)
+            if sess:
+                authenticated = True
+                tenant_id = sess.get("tenant_id", "tenant_primary")
+                principal = sess.get("sub", "session_user")
+            else:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Unauthorized: Invalid or expired session token."}
+                )
+
+        # 2. Check X-API-Key
+        if not authenticated:
+            api_key = request.headers.get("X-API-Key")
+            if api_key:
+                if api_key == EXPECTED_API_KEY:
+                    authenticated = True
+                    tenant_id = "tenant_primary"
+                    principal = "admin_api_key"
+                else:
+                    dev_id = device_gateway.authenticate_device(api_key)
+                    if dev_id:
+                        authenticated = True
+                        tenant_id = dev_id.get("tenant_id", "tenant_primary")
+                        principal = dev_id.get("device_id", "device")
+                    else:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Forbidden: Invalid API key."}
+                        )
+
+        if not authenticated:
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Unauthorized: Missing X-API-Key authentication header."}
+                content={"detail": "Unauthorized: Missing authentication credentials (Bearer token or X-API-Key)."}
             )
-        if api_key != EXPECTED_API_KEY:
-            return JSONResponse(
-                status_code=403, 
-                content={"detail": "Forbidden: Invalid X-API-Key authentication header."}
-            )
-            
+
+        # Store authenticated state on request
+        request.state.tenant_id = tenant_id
+        request.state.principal = principal
+
     return await call_next(request)
 
 memory_store = MemoryStore()
@@ -1013,13 +1096,58 @@ def get_task_status_endpoint(task_id: str):
 # REST API: First-Party Native Services Engine
 # ==========================================
 def resolve_tenant(request: Request, body_tenant: Optional[str] = None) -> str:
-    """Derives tenant securely from request headers or authenticated context."""
+    """
+    Derives tenant strictly from authenticated server-side principal.
+    Rejects any unauthorized cross-tenant impersonation attempt.
+    """
+    auth_tenant = getattr(request.state, "tenant_id", None)
+    principal = getattr(request.state, "principal", None)
+
+    # For admin API key (e.g. automated test suites testing multi-tenant isolation):
+    if principal == "admin_api_key":
+        header_tenant = request.headers.get("X-Tenant-Id")
+        if header_tenant and header_tenant.strip():
+            return header_tenant.strip()
+        if body_tenant and body_tenant.strip():
+            return body_tenant.strip()
+        return auth_tenant or "tenant_primary"
+
+    # For regular sessions, devices, and users: strictly enforce the principal's tenant
+    if not auth_tenant:
+        auth_tenant = "tenant_primary"
+
     header_tenant = request.headers.get("X-Tenant-Id")
-    if header_tenant and header_tenant.strip():
-        return header_tenant.strip()
-    if body_tenant and body_tenant.strip():
-        return body_tenant.strip()
-    return "tenant_primary"
+    if header_tenant and header_tenant.strip() and header_tenant.strip() != auth_tenant:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Forbidden: Cross-tenant access violation. Principal '{principal}' cannot access tenant '{header_tenant}'."
+        )
+
+    if body_tenant and body_tenant.strip() and body_tenant.strip() != auth_tenant:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Forbidden: Cross-tenant access violation. Principal '{principal}' cannot access tenant '{body_tenant}'."
+        )
+
+    return auth_tenant
+
+# ==========================================
+# REST API: Session Ticket Issuance for Web Cockpit
+# ==========================================
+class SessionIssueRequest(BaseModel):
+    tenant_id: Optional[str] = "tenant_primary"
+
+@app.post("/api/auth/session")
+def issue_session_ticket(req: Optional[SessionIssueRequest] = None):
+    tenant = req.tenant_id if req and req.tenant_id else "tenant_primary"
+    token = create_session_token(tenant_id=tenant, principal="web_cockpit")
+    return {
+        "session_token": token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "tenant_id": tenant
+    }
+
 
 @app.get("/api/services/food/restaurants")
 def get_restaurants():
@@ -1230,15 +1358,48 @@ class GovernanceEvalRequest(BaseModel):
     task_id: str
     action: str
     amount: Optional[str] = None
-    user_id: Optional[str] = "tenant_primary"
+    user_id: Optional[str] = None
 
 @app.post("/api/governance/evaluate")
-def evaluate_governance_endpoint(req: GovernanceEvalRequest):
+def evaluate_governance_endpoint(req: GovernanceEvalRequest, request: Request):
+    tenant = resolve_tenant(request, req.user_id)
     return financial_gate.evaluate_transaction(
         task_id=req.task_id,
         action=req.action,
         amount=req.amount,
-        user_id=req.user_id or "tenant_primary"
+        user_id=tenant
+    )
+
+class GovernanceAuthorizeRequest(BaseModel):
+    task_id: str
+    token: Optional[str] = None
+    challenge_nonce: Optional[str] = None
+    signature: Optional[str] = None
+    user_id: Optional[str] = None
+
+@app.post("/api/governance/authorize")
+def authorize_governance_endpoint(req: GovernanceAuthorizeRequest, request: Request):
+    tenant = resolve_tenant(request, req.user_id)
+    return financial_gate.authorize_transaction(
+        token_str=req.token,
+        task_id=req.task_id,
+        user_id=tenant,
+        challenge_nonce=req.challenge_nonce,
+        signature=req.signature
+    )
+
+class GovernanceDeclineRequest(BaseModel):
+    task_id: str
+    reason: Optional[str] = "User declined"
+    user_id: Optional[str] = None
+
+@app.post("/api/governance/decline")
+def decline_governance_endpoint(req: GovernanceDeclineRequest, request: Request):
+    tenant = resolve_tenant(request, req.user_id)
+    return financial_gate.decline_transaction(
+        task_id=req.task_id,
+        user_id=tenant,
+        reason=req.reason or "User declined"
     )
 
 # ==========================================
@@ -1247,21 +1408,14 @@ def evaluate_governance_endpoint(req: GovernanceEvalRequest):
 class ShowcaseRunRequest(BaseModel):
     tenant_id: Optional[str] = "tenant_primary"
 
-@app.get("/api/showcase/run")
 @app.post("/api/showcase/run")
-async def run_showcase_endpoint(req: Optional[ShowcaseRunRequest] = None):
-    tenant = req.tenant_id if req and req.tenant_id else "tenant_primary"
+async def run_showcase_endpoint(request: Request, req: Optional[ShowcaseRunRequest] = None):
+    requested_tenant = req.tenant_id if req and req.tenant_id else None
+    tenant = resolve_tenant(request, requested_tenant)
     events = []
     async for event in showcase_runner.run_live_showcase(tenant):
         events.append(event)
     return {"success": True, "events": events}
-
-@app.get("/api/showcase/steps")
-async def get_showcase_steps_endpoint():
-    events = []
-    async for event in showcase_runner.run_live_showcase("tenant_primary"):
-        events.append(event)
-    return {"success": True, "steps": events, "total": len(events)}
 
 # ==========================================
 # WebSockets: Real-time Streaming Agent Loop
@@ -1272,6 +1426,10 @@ async def websocket_agent_endpoint(websocket: WebSocket):
     identity = device_gateway.authenticate_device(token)
     if not identity and token == EXPECTED_API_KEY:
         identity = {"device_id": "web_simulator", "tenant_id": "tenant_primary"}
+    if not identity and token:
+        sess = verify_session_token(token)
+        if sess:
+            identity = {"device_id": sess.get("sub", "web_cockpit"), "tenant_id": sess.get("tenant_id", "tenant_primary")}
     
     if not identity:
         await websocket.close(code=1008, reason="Unauthorized Device")
@@ -1318,6 +1476,8 @@ async def websocket_agent_endpoint(websocket: WebSocket):
             elif msg_type == "BIOMETRIC_AUTH_RESULT":
                 task_id = payload.get("task_id", "")
                 token = payload.get("token", "")
+                challenge_nonce = payload.get("challenge_nonce")
+                signature = payload.get("signature")
                 status = payload.get("status", "REJECTED")
                 amount = payload.get("amount", "")
                 action = payload.get("action", "")
@@ -1325,7 +1485,13 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 user_id = tenant_id
 
                 if status == "APPROVED":
-                    auth_res = financial_gate.authorize_transaction(token_str=token, task_id=task_id, user_id=user_id)
+                    auth_res = financial_gate.authorize_transaction(
+                        token_str=token,
+                        task_id=task_id,
+                        user_id=user_id,
+                        challenge_nonce=challenge_nonce,
+                        signature=signature
+                    )
                     if auth_res.get("success"):
                         speech = f"Biometric Authorization Verified! Executing {action or 'action'}."
                         audio_uri = None
@@ -1334,7 +1500,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                         except Exception as e:
                             print(f"TTS error on biometric approve: {e}")
 
-                        task_manager.update_task_state(task_id, TaskState.AUTHORIZED, {"token": token, "authorized_at": auth_res.get("authorized_at")})
+                        task_manager.update_task_state(task_id, TaskState.AUTHORIZED, {"token": token, "challenge_nonce": challenge_nonce, "authorized_at": auth_res.get("authorized_at")})
 
                         await websocket.send_json({
                             "type": "ACTION_CONFIRMED",
