@@ -74,6 +74,38 @@ class MessageSendCapability(CapabilityContract):
             evidence={"last_observation": last_step.get("observation", {})}
         )
 
-    def execute_native(self, params: MessageSendInput, tenant_id: str = "tenant_default") -> Dict[str, Any]:
+    def execute_native(self, params: MessageSendInput, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         from ..first_party_services import messages_service
-        return messages_service.send_message(tenant_id, params.recipient, params.text)
+        return messages_service.send_message(
+            tenant_id=tenant_id,
+            recipient=params.recipient,
+            body=params.text,
+            idempotency_key=idempotency_key
+        )
+
+    def verify_native(self, native_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        if not native_result.get("success"):
+            return CapabilityOutcome(
+                success=False,
+                verified=False,
+                reason=native_result.get("error", "Message send failed"),
+                evidence=native_result
+            )
+        msg = native_result.get("message", {})
+        msg_id = msg.get("id")
+        from ..first_party_services import messages_service
+        all_msgs = messages_service.list_messages(tenant_id, recipient=msg.get("recipient"))
+        matched = next((m for m in all_msgs if m["id"] == msg_id), None)
+        if matched and matched["status"] == "DELIVERED":
+            return CapabilityOutcome(
+                success=True,
+                verified=True,
+                reason=f"Message to '{msg.get('recipient')}' verified in durable SQLite storage (Status: DELIVERED).",
+                evidence={"message": matched}
+            )
+        return CapabilityOutcome(
+            success=False,
+            verified=False,
+            reason="Message not found in persistent database after send.",
+            evidence=native_result
+        )

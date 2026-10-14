@@ -236,6 +236,64 @@ class AgentOrchestrator:
 
 
         # ==============================================================
+        # MULTI-CAPABILITY FIRST-PARTY INTENT ROUTING (Zero UI Automation)
+        # ==============================================================
+        from .multi_capability_orchestrator import multi_capability_orchestrator
+        orch_plan = multi_capability_orchestrator.decompose_prompt(user_prompt, tenant_id=user_id)
+        if len(orch_plan.steps) >= 2:
+            yield {
+                "type": "LOG_STEP",
+                "step": "ORCHESTRATOR",
+                "title": f"Multi-Capability Execution ({len(orch_plan.steps)} Native Tools)",
+                "description": "Compound natural language request routed directly to typed capability contracts against durable SQLite storage.",
+                "payload": orch_plan.dict()
+            }
+            auth_token = getattr(request, "financial_token", None) or getattr(request, "authorization_token", None)
+            async for evt in multi_capability_orchestrator.execute_orchestration_stream(
+                prompt=user_prompt,
+                tenant_id=user_id,
+                authorization_token=auth_token,
+                idempotency_key=getattr(request, "idempotency_key", None)
+            ):
+                if evt["type"] == "APPROVAL_REQUIRED":
+                    yield {
+                        "type": "CHARACTER_STATE",
+                        "state": "WAITING_CONFIRM",
+                        "speech": evt["prompt"]
+                    }
+                    yield {
+                        "type": "HIGH_RISK_PROMPT",
+                        "plan": orch_plan.dict(),
+                        "governance_mode": "ASK",
+                        "financial_token": evt["financial_token"],
+                        "total_cost": f"${evt['total_cost']:.2f}",
+                        "restaurant": evt["restaurant"],
+                        "item": evt["item"],
+                        "quantity": evt["quantity"]
+                    }
+                elif evt["type"] == "STEP_COMPLETED":
+                    yield {
+                        "type": "LOG_STEP",
+                        "step": "CAPABILITY",
+                        "title": f"Verified {evt['capability']} ({evt['duration_ms']}ms)",
+                        "description": evt["reason"],
+                        "payload": evt["result"]
+                    }
+                elif evt["type"] == "ORCHESTRATION_COMPLETE":
+                    yield {
+                        "type": "CHARACTER_STATE",
+                        "state": "SUCCESS" if evt["all_verified"] else "WARNING",
+                        "speech": evt["summary_speech"]
+                    }
+                    task_manager.transition_state(
+                        task_rec.task_id,
+                        TaskState.VERIFIED if evt["all_verified"] else TaskState.COMPLETED,
+                        reason="Multi-capability orchestration verified",
+                        result_cache=evt
+                    )
+            return
+
+        # ==============================================================
         # STEP 3: SCRAPLING WEB INTELLIGENCE (If live research or prices/reviews needed)
         # ==============================================================
         web_intel_result = None

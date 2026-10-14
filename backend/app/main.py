@@ -1012,89 +1012,163 @@ def get_task_status_endpoint(task_id: str):
 # ==========================================
 # REST API: First-Party Native Services Engine
 # ==========================================
+def resolve_tenant(request: Request, body_tenant: Optional[str] = None) -> str:
+    """Derives tenant securely from request headers or authenticated context."""
+    header_tenant = request.headers.get("X-Tenant-Id")
+    if header_tenant and header_tenant.strip():
+        return header_tenant.strip()
+    if body_tenant and body_tenant.strip():
+        return body_tenant.strip()
+    return "tenant_primary"
+
 @app.get("/api/services/food/restaurants")
 def get_restaurants():
     return food_service.list_restaurants()
 
 @app.get("/api/services/food/cart")
-def get_food_cart(tenant_id: str = "tenant_primary"):
-    return food_service.get_cart(tenant_id)
+def get_food_cart(request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return food_service.get_cart(tenant)
 
 class AddToCartRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None
     item_id: str
     quantity: int = 1
 
 @app.post("/api/services/food/cart")
-def add_to_food_cart(req: AddToCartRequest):
-    return food_service.add_to_cart(req.tenant_id or "tenant_primary", req.item_id, req.quantity)
+def add_to_food_cart(req: AddToCartRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
+    return food_service.add_to_cart(tenant, req.item_id, req.quantity)
 
 class FoodCheckoutRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None
     address: Optional[str] = "742 Evergreen Terrace"
+    restaurant_name: Optional[str] = "Sushi Zen"
+    idempotency_key: Optional[str] = None
 
 @app.post("/api/services/food/checkout")
-def checkout_food_cart(req: FoodCheckoutRequest):
-    return food_service.checkout(req.tenant_id or "tenant_primary", req.address or "742 Evergreen Terrace")
+def checkout_food_cart(req: FoodCheckoutRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
+    return food_service.checkout(
+        tenant_id=tenant,
+        address=req.address or "742 Evergreen Terrace",
+        restaurant_name=req.restaurant_name or "Sushi Zen",
+        idempotency_key=req.idempotency_key
+    )
+
+@app.get("/api/services/food/orders")
+def list_food_orders(request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return food_service.list_orders(tenant)
 
 @app.get("/api/services/messages/threads")
-def get_message_threads(tenant_id: str = "tenant_primary"):
-    return messages_service.get_threads(tenant_id)
+def get_message_threads(request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return messages_service.get_threads(tenant)
 
 class SendMessageRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None
     recipient: str
     body: str
+    idempotency_key: Optional[str] = None
 
 @app.post("/api/services/messages/send")
-def send_message_endpoint(req: SendMessageRequest):
-    return messages_service.send_message(req.tenant_id or "tenant_primary", req.recipient, req.body)
+def send_message_endpoint(req: SendMessageRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
+    return messages_service.send_message(
+        tenant_id=tenant,
+        recipient=req.recipient,
+        body=req.body,
+        idempotency_key=req.idempotency_key
+    )
+
+@app.get("/api/services/messages")
+def list_messages_endpoint(request: Request, tenant_id: Optional[str] = None, recipient: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return messages_service.list_messages(tenant, recipient=recipient)
 
 @app.get("/api/services/calendar/events")
-def get_calendar_events(tenant_id: str = "tenant_primary"):
-    return calendar_service.list_events(tenant_id)
+def get_calendar_events(request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return calendar_service.list_events(tenant)
 
 class CreateCalendarEventRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None
     title: str
     start_time: str
     duration_minutes: int = 60
     location: Optional[str] = ""
     attendees: Optional[List[str]] = None
+    idempotency_key: Optional[str] = None
 
 @app.post("/api/services/calendar/events")
-def create_calendar_event(req: CreateCalendarEventRequest):
+def create_calendar_event(req: CreateCalendarEventRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
     return calendar_service.create_event(
-        tenant_id=req.tenant_id or "tenant_primary",
+        tenant_id=tenant,
         title=req.title,
         start_time=req.start_time,
         duration_minutes=req.duration_minutes,
         location=req.location or "",
-        attendees=req.attendees or []
+        attendees=req.attendees or [],
+        idempotency_key=req.idempotency_key
     )
 
 @app.get("/api/services/tasks")
-def list_tasks_endpoint(tenant_id: str = "tenant_primary", completed: Optional[bool] = None):
-    return tasks_service.list_tasks(tenant_id, completed=completed)
+def list_tasks_endpoint(request: Request, tenant_id: Optional[str] = None, completed: Optional[bool] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return tasks_service.list_tasks(tenant, completed=completed)
 
 class CreateTaskRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None
     title: str
     due_date: Optional[str] = ""
     priority: Optional[str] = "NORMAL"
+    idempotency_key: Optional[str] = None
 
 @app.post("/api/services/tasks")
-def create_task_endpoint(req: CreateTaskRequest):
+def create_task_endpoint(req: CreateTaskRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
     return tasks_service.create_task(
-        tenant_id=req.tenant_id or "tenant_primary",
+        tenant_id=tenant,
         title=req.title,
         due_date=req.due_date or "",
-        priority=req.priority or "NORMAL"
+        priority=req.priority or "NORMAL",
+        idempotency_key=req.idempotency_key
     )
 
 @app.post("/api/services/tasks/{task_id}/complete")
-def complete_task_endpoint(task_id: str, tenant_id: str = "tenant_primary"):
-    return tasks_service.complete_task(tenant_id, task_id)
+def complete_task_endpoint(task_id: str, request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    return tasks_service.complete_task(tenant, task_id)
+
+# ==========================================
+# REST API: Multi-Capability Agent Orchestrator
+# ==========================================
+from .multi_capability_orchestrator import multi_capability_orchestrator
+
+class OrchestrateGoalRequest(BaseModel):
+    prompt: str
+    tenant_id: Optional[str] = None
+    authorization_token: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+@app.post("/api/agent/orchestrate")
+async def orchestrate_goal_endpoint(req: OrchestrateGoalRequest, request: Request):
+    tenant = resolve_tenant(request, req.tenant_id)
+    res = await multi_capability_orchestrator.execute_orchestration(
+        prompt=req.prompt,
+        tenant_id=tenant,
+        authorization_token=req.authorization_token,
+        idempotency_key=req.idempotency_key
+    )
+    return res
+
+@app.get("/api/agent/orchestrate/plan")
+def plan_orchestration_endpoint(prompt: str, request: Request, tenant_id: Optional[str] = None):
+    tenant = resolve_tenant(request, tenant_id)
+    plan = multi_capability_orchestrator.decompose_prompt(prompt, tenant_id=tenant)
+    return plan.dict()
 
 # ==========================================
 # REST API: FastPath & Governance Testing

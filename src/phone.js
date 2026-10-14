@@ -4,6 +4,27 @@
  * renders UI, and generates the Accessibility Node Hierarchy for screen grounding.
  */
 
+const API_BASE = 'http://127.0.0.1:8000';
+const API_KEY = 'synapse_api_sec_prod_9a2b8c4d1e7f0_2026';
+
+async function fetchService(endpoint, options = {}) {
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers: {
+        'X-API-Key': API_KEY,
+        'Content-Type': 'application/json',
+        ...(options.headers || {})
+      }
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn(`[PhoneSimulator] Fetch error ${endpoint}:`, e);
+    return null;
+  }
+}
+
 export class PhoneSimulator {
   constructor(viewportId) {
     this.viewport = document.getElementById(viewportId);
@@ -26,8 +47,11 @@ export class PhoneSimulator {
     });
     const chipMap = {
       home: 'btn-nav-home',
-      cinema: 'btn-nav-movies',
+      calendar: 'btn-nav-calendar',
       food: 'btn-nav-food',
+      messages: 'btn-nav-messages',
+      tasks: 'btn-nav-tasks',
+      cinema: 'btn-nav-movies',
       mail: 'btn-nav-mail',
       rides: 'btn-nav-rides',
       maps: 'btn-nav-maps'
@@ -111,8 +135,11 @@ export class PhoneSimulator {
   getAppTitle() {
     switch (this.currentApp) {
       case 'home': return 'Home Launcher';
+      case 'calendar': return 'Synapse Calendar (Durable SQLite)';
+      case 'food': return 'Synapse Food (Durable SQLite)';
+      case 'messages': return 'Synapse Messages (Durable SQLite)';
+      case 'tasks': return 'Synapse Tasks (Durable SQLite)';
       case 'cinema': return 'CinePass IMAX Booking';
-      case 'food': return 'BiteGo Food Delivery';
       case 'mail': return 'Spark Mail — Inbox';
       case 'rides': return 'PulseRide — Live Ride Booking';
       case 'maps': return 'Orbit Maps — Live Navigation';
@@ -127,11 +154,20 @@ export class PhoneSimulator {
       case 'home':
         this.renderHome();
         break;
-      case 'cinema':
-        this.renderCinema();
+      case 'calendar':
+        this.renderCalendar();
         break;
       case 'food':
         this.renderFood();
+        break;
+      case 'messages':
+        this.renderMessages();
+        break;
+      case 'tasks':
+        this.renderTasks();
+        break;
+      case 'cinema':
+        this.renderCinema();
         break;
       case 'mail':
         this.renderMail();
@@ -297,53 +333,333 @@ export class PhoneSimulator {
     if (backBtn) backBtn.onclick = () => this.setApp('home');
   }
 
-  // 3. FOOD APP
-  renderFood() {
+  // 2. CALENDAR APP (Synapse Calendar - Durable SQLite)
+  async renderCalendar() {
     this.nodes = [
-      { id: 'btn_back_home', domId: 'el-food-back', role: 'button', text: 'Back', clickable: true },
-      { id: 'card_biryani_paradise', domId: 'el-card-biryani', role: 'card', text: 'Paradise Dum Biryani (Vegetarian & Awadhi)', clickable: true },
-      { id: 'btn_order_biryani', domId: 'el-btn-order-biryani', role: 'button', text: 'Reorder Usual ($18.50)', clickable: true }
+      { id: 'btn_back_home', domId: 'el-cal-back', role: 'button', text: 'Back', clickable: true },
+      { id: 'btn_add_event_test', domId: 'el-btn-add-event', role: 'button', text: 'Quick Event', clickable: true }
     ];
 
     this.viewport.innerHTML = `
-      <div class="app-view-food">
-        <div class="app-nav-bar">
-          <button class="view-chip" id="el-food-back">← Home</button>
-          <span class="app-title-text">BiteGo Delivery</span>
-          <span class="app-tag" style="background: rgba(249, 115, 22, 0.15); color: #fb923c;">Nearby</span>
+      <div class="app-view-calendar" style="padding: 12px; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div class="app-nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <button class="view-chip" id="el-cal-back" style="cursor: pointer;">← Home</button>
+          <span style="font-weight: 700; color: #38bdf8;">📅 Synapse Calendar</span>
+          <span class="app-tag" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;">Live SQLite</span>
         </div>
 
-        <div class="food-card highlighted" id="el-card-biryani">
-          <div class="food-icon-box">🍛</div>
-          <div class="food-details">
-            <h4 class="food-title">Paradise Dum Biryani</h4>
-            <p class="food-subtitle">Hyderabadi Spices • 1.2 miles (22 mins)</p>
-            <div class="food-tags">
-              <span class="badge-pill veg">🌱 Pure Veg Options</span>
-              <span class="badge-pill rating">⭐ 4.8 (1.2k)</span>
+        <div id="calendar-content-body">
+          <div style="font-size: 0.75rem; color: #94a3b8; text-align: center; padding: 20px;">Loading confirmed events from SQLite...</div>
+        </div>
+      </div>
+    `;
+
+    const backBtn = document.getElementById('el-cal-back');
+    if (backBtn) backBtn.onclick = () => this.setApp('home');
+
+    const events = await fetchService('/api/services/calendar/events') || [];
+    const container = document.getElementById('calendar-content-body');
+    if (!container) return;
+
+    if (events.length === 0) {
+      container.innerHTML = `
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px; padding: 18px; text-align: center;">
+          <span style="font-size: 1.5rem;">📅</span>
+          <p style="font-size: 0.75rem; color: #94a3b8; margin: 6px 0 10px 0;">No calendar events yet.</p>
+          <button class="btn secondary" id="el-btn-add-event" style="padding: 6px 12px; font-size: 0.72rem; cursor: pointer;">
+            + Test Add Event
+          </button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase;">Confirmed Schedule (${events.length})</span>
+          <button class="btn secondary" id="el-btn-add-event" style="padding: 4px 8px; font-size: 0.7rem; cursor: pointer;">+ Add</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          ${events.map(ev => `
+            <div style="background: rgba(15, 23, 42, 0.7); border-left: 3px solid #38bdf8; border-radius: 8px; padding: 10px; font-size: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+              <div style="font-weight: 700; color: #f8fafc; font-size: 0.8rem;">${ev.title}</div>
+              <div style="color: #38bdf8; font-size: 0.72rem; margin: 3px 0;">⏰ ${ev.start_time.replace('T', ' ')} (${ev.duration_minutes || 60}m)</div>
+              ${ev.location ? `<div style="color: #94a3b8; font-size: 0.7rem;">📍 ${ev.location}</div>` : ''}
+              ${ev.attendees && ev.attendees.length > 0 ? `<div style="color: #64748b; font-size: 0.68rem; margin-top: 4px;">👥 ${ev.attendees.join(', ')}</div>` : ''}
             </div>
-            <button class="btn primary" id="el-btn-order-biryani" style="margin-top: 6px; padding: 6px 10px; font-size: 0.72rem; align-self: flex-start; background: #f97316; color: #fff;">
-              Order Usual: Veg Dum Biryani ($18.50)
-            </button>
-          </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    const addBtn = document.getElementById('el-btn-add-event');
+    if (addBtn) {
+      addBtn.onclick = async () => {
+        addBtn.textContent = '⏳ Saving...';
+        await fetchService('/api/services/calendar/events', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: 'Team Product Sync',
+            start_time: '2026-10-16T14:30:00',
+            duration_minutes: 45,
+            location: 'Main Conference Room',
+            attendees: ['sam@synapse.ai', 'alex@synapse.ai']
+          })
+        });
+        this.renderCalendar();
+      };
+    }
+  }
+
+  // 3. FOOD APP (Synapse Food - Durable SQLite)
+  async renderFood() {
+    this.nodes = [
+      { id: 'btn_back_home', domId: 'el-food-back', role: 'button', text: 'Back', clickable: true },
+      { id: 'btn_order_sushi', domId: 'el-btn-order-sushi', role: 'button', text: 'Order Sushi Zen', clickable: true }
+    ];
+
+    this.viewport.innerHTML = `
+      <div class="app-view-food" style="padding: 12px; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div class="app-nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <button class="view-chip" id="el-food-back" style="cursor: pointer;">← Home</button>
+          <span style="font-weight: 700; color: #f97316;">🍣 Synapse Food</span>
+          <span class="app-tag" style="background: rgba(249, 115, 22, 0.2); color: #fb923c; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;">Durable SQLite</span>
         </div>
 
-        <div class="food-card">
-          <div class="food-icon-box" style="background: linear-gradient(135deg, #10b981, #047857);">🥗</div>
-          <div class="food-details">
-            <h4 class="food-title">Green Bowl Organic</h4>
-            <p class="food-subtitle">Farm Fresh • 0.8 miles (15 mins)</p>
-            <div class="food-tags">
-              <span class="badge-pill veg">🌱 Vegan & Gluten Free</span>
-              <span class="badge-pill rating">⭐ 4.6</span>
-            </div>
-          </div>
+        <div id="food-content-body">
+          <div style="font-size: 0.75rem; color: #94a3b8; text-align: center; padding: 20px;">Loading orders & kitchens...</div>
         </div>
       </div>
     `;
 
     const backBtn = document.getElementById('el-food-back');
     if (backBtn) backBtn.onclick = () => this.setApp('home');
+
+    const orders = await fetchService('/api/services/food/orders') || [];
+    const container = document.getElementById('food-content-body');
+    if (!container) return;
+
+    let ordersHtml = '';
+    if (orders.length > 0) {
+      ordersHtml = `
+        <div style="margin-bottom: 14px;">
+          <h5 style="font-size: 0.72rem; text-transform: uppercase; color: #10b981; margin: 0 0 6px 0;">Confirmed Orders (${orders.length})</h5>
+          ${orders.slice(0, 3).map(o => `
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 8px; margin-bottom: 6px; font-size: 0.72rem;">
+              <div style="display: flex; justify-content: space-between; font-weight: 600;">
+                <span style="color: #38bdf8;">${o.restaurant_name}</span>
+                <span style="color: #10b981;">$${Number(o.total).toFixed(2)}</span>
+              </div>
+              <div style="color: #94a3b8; margin-top: 2px; font-size: 0.7rem;">
+                ${o.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
+              </div>
+              <div style="color: #64748b; font-size: 0.65rem; margin-top: 3px;">
+                Status: <span style="color: #10b981; font-weight: 600;">${o.status}</span> • ID: ${o.order_id}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    container.innerHTML = `
+      ${ordersHtml}
+      <h5 style="font-size: 0.72rem; text-transform: uppercase; color: #94a3b8; margin: 0 0 6px 0;">Available Kitchens</h5>
+      <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; margin-bottom: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-weight: 700; font-size: 0.82rem;">Sushi Zen</span>
+          <span style="color: #fbbf24; font-size: 0.75rem;">⭐ 4.9 (Japanese)</span>
+        </div>
+        <p style="font-size: 0.7rem; color: #94a3b8; margin: 4px 0 8px 0;">Omakase selection, fresh yellowfin roll, miso</p>
+        <button class="btn primary" id="el-btn-order-sushi" style="width: 100%; padding: 6px; font-size: 0.72rem; background: #f97316; border: none; border-radius: 6px; color: white; cursor: pointer;">
+          Order 2x Omakase Platter ($101.19)
+        </button>
+      </div>
+    `;
+
+    const sushiBtn = document.getElementById('el-btn-order-sushi');
+    if (sushiBtn) {
+      sushiBtn.onclick = async () => {
+        sushiBtn.textContent = '⏳ Checking Out...';
+        await fetchService('/api/services/food/cart', {
+          method: 'POST',
+          body: JSON.stringify({ item_id: 'sushi_omakase', quantity: 2 })
+        });
+        await fetchService('/api/services/food/checkout', {
+          method: 'POST',
+          body: JSON.stringify({ address: '742 Evergreen Terrace', restaurant_name: 'Sushi Zen' })
+        });
+        this.renderFood();
+      };
+    }
+  }
+
+  // 4. MESSAGES APP (Synapse Messages - Durable SQLite)
+  async renderMessages() {
+    this.nodes = [
+      { id: 'btn_back_home', domId: 'el-msg-back', role: 'button', text: 'Back', clickable: true },
+      { id: 'btn_send_test_msg', domId: 'el-btn-send-msg', role: 'button', text: 'Send Message', clickable: true }
+    ];
+
+    this.viewport.innerHTML = `
+      <div class="app-view-messages" style="padding: 12px; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div class="app-nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <button class="view-chip" id="el-msg-back" style="cursor: pointer;">← Home</button>
+          <span style="font-weight: 700; color: #8b5cf6;">💬 Synapse Messages</span>
+          <span class="app-tag" style="background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;">Durable SQLite</span>
+        </div>
+
+        <div id="messages-content-body">
+          <div style="font-size: 0.75rem; color: #94a3b8; text-align: center; padding: 20px;">Loading threads from SQLite...</div>
+        </div>
+      </div>
+    `;
+
+    const backBtn = document.getElementById('el-msg-back');
+    if (backBtn) backBtn.onclick = () => this.setApp('home');
+
+    const threads = await fetchService('/api/services/messages/threads') || [];
+    const container = document.getElementById('messages-content-body');
+    if (!container) return;
+
+    if (threads.length === 0) {
+      container.innerHTML = `
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px; padding: 18px; text-align: center;">
+          <span style="font-size: 1.5rem;">💬</span>
+          <p style="font-size: 0.75rem; color: #94a3b8; margin: 6px 0 10px 0;">No messages yet.</p>
+          <button class="btn secondary" id="el-btn-send-msg" style="padding: 6px 12px; font-size: 0.72rem; cursor: pointer;">
+            + Send Test Message
+          </button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          ${threads.map(t => {
+            const lastMsg = t.messages && t.messages.length > 0 ? t.messages[t.messages.length - 1] : {};
+            return `
+              <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 10px; font-size: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 3px;">
+                  <span style="color: #c084fc;">👤 ${t.recipient}</span>
+                  <span style="color: #64748b; font-size: 0.65rem;">${t.count} msg(s)</span>
+                </div>
+                <div style="color: #cbd5e1; font-size: 0.72rem; background: rgba(30, 41, 59, 0.5); border-radius: 6px; padding: 6px; margin: 4px 0;">
+                  "${lastMsg.body || ''}"
+                </div>
+                <div style="color: #10b981; font-size: 0.65rem; text-align: right;">
+                  ${lastMsg.status || 'DELIVERED'} ✓✓
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    const testBtn = document.getElementById('el-btn-send-msg');
+    if (testBtn) {
+      testBtn.onclick = async () => {
+        testBtn.textContent = '⏳ Dispatching...';
+        await fetchService('/api/services/messages/send', {
+          method: 'POST',
+          body: JSON.stringify({
+            recipient: 'Team Lead',
+            body: 'Hey, I will be attending the Friday Strategy Lunch.'
+          })
+        });
+        this.renderMessages();
+      };
+    }
+  }
+
+  // 5. TASKS APP (Synapse Tasks - Durable SQLite)
+  async renderTasks() {
+    this.nodes = [
+      { id: 'btn_back_home', domId: 'el-tasks-back', role: 'button', text: 'Back', clickable: true },
+      { id: 'btn_add_task', domId: 'el-btn-add-task', role: 'button', text: 'Add Task', clickable: true }
+    ];
+
+    this.viewport.innerHTML = `
+      <div class="app-view-tasks" style="padding: 12px; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div class="app-nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <button class="view-chip" id="el-tasks-back" style="cursor: pointer;">← Home</button>
+          <span style="font-weight: 700; color: #10b981;">✅ Synapse Tasks</span>
+          <span class="app-tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;">Durable SQLite</span>
+        </div>
+
+        <div id="tasks-content-body">
+          <div style="font-size: 0.75rem; color: #94a3b8; text-align: center; padding: 20px;">Loading tasks from SQLite...</div>
+        </div>
+      </div>
+    `;
+
+    const backBtn = document.getElementById('el-tasks-back');
+    if (backBtn) backBtn.onclick = () => this.setApp('home');
+
+    const tasks = await fetchService('/api/services/tasks') || [];
+    const container = document.getElementById('tasks-content-body');
+    if (!container) return;
+
+    if (tasks.length === 0) {
+      container.innerHTML = `
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px; padding: 18px; text-align: center;">
+          <span style="font-size: 1.5rem;">✅</span>
+          <p style="font-size: 0.75rem; color: #94a3b8; margin: 6px 0 10px 0;">No active tasks.</p>
+          <button class="btn secondary" id="el-btn-add-task" style="padding: 6px 12px; font-size: 0.72rem; cursor: pointer;">
+            + Add First Task
+          </button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Active Todos (${tasks.length})</span>
+          <button class="btn secondary" id="el-btn-add-task" style="padding: 4px 8px; font-size: 0.7rem; cursor: pointer;">+ Add</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          ${tasks.map(t => {
+            const priorityColor = t.priority === 'HIGH' ? '#f43f5e' : t.priority === 'URGENT' ? '#ef4444' : '#fbbf24';
+            return `
+              <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input type="checkbox" ${t.completed ? 'checked disabled' : ''} data-task-id="${t.id}" class="task-toggle-checkbox" style="cursor: pointer;" />
+                  <span style="${t.completed ? 'text-decoration: line-through; color: #64748b;' : 'color: #f8fafc; font-weight: 500;'}">
+                    ${t.title}
+                  </span>
+                </div>
+                <span style="font-size: 0.65rem; color: ${priorityColor}; font-weight: 700; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px;">
+                  ${t.priority}
+                </span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    // Bind checkboxes to complete task endpoint
+    container.querySelectorAll('.task-toggle-checkbox').forEach(chk => {
+      chk.onchange = async () => {
+        const taskId = chk.getAttribute('data-task-id');
+        if (taskId) {
+          await fetchService(`/api/services/tasks/${taskId}/complete`, { method: 'POST' });
+          this.renderTasks();
+        }
+      };
+    });
+
+    const addBtn = document.getElementById('el-btn-add-task');
+    if (addBtn) {
+      addBtn.onclick = async () => {
+        addBtn.textContent = '⏳ Saving...';
+        await fetchService('/api/services/tasks', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: 'Review team feedback on Q4 roadmap',
+            priority: 'HIGH'
+          })
+        });
+        this.renderTasks();
+      };
+    }
   }
 
   // 4. MAIL APP

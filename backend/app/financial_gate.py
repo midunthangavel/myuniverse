@@ -245,7 +245,7 @@ class FinancialAuditLedger:
         cur.execute("""
             SELECT id, timestamp, user_id, task_id, action, amount, status, token, approved_at, notes
             FROM financial_audit_ledger
-            ORDER BY timestamp DESC
+            ORDER BY timestamp DESC, id DESC
             LIMIT ?
         """, (limit,))
         rows = cur.fetchall()

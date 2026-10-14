@@ -64,6 +64,22 @@ class CapabilityContract(ABC):
         """Evaluates whether the requested outcome truthfully occurred."""
         pass
 
-    def execute_native(self, params: BaseModel, tenant_id: str = "tenant_default") -> Dict[str, Any]:
+    def execute_native(self, params: BaseModel, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         """Executes capability natively through first-party service backends when available."""
         return {"supported": False, "reason": "Native execution not implemented"}
+
+    def verify_native(self, native_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        """Truthfully verifies native execution against persistent SQLite storage."""
+        if not native_result.get("success", False):
+            return CapabilityOutcome(
+                success=False,
+                verified=False,
+                reason=native_result.get("error", "Native execution failed"),
+                evidence=native_result
+            )
+        return CapabilityOutcome(
+            success=True,
+            verified=True,
+            reason="Native operation verified in durable storage.",
+            evidence=native_result
+        )

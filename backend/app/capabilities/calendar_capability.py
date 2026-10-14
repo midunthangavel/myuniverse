@@ -75,14 +75,42 @@ class CalendarCreateCapability(CapabilityContract):
             evidence={"last_observation": last_step.get("observation", {})}
         )
 
-    def execute_native(self, params: CalendarCreateInput, tenant_id: str = "tenant_default") -> Dict[str, Any]:
+    def execute_native(self, params: CalendarCreateInput, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         from ..first_party_services import calendar_service
         dur = getattr(params, "duration_min", 30)
+        loc = getattr(params, "location", "")
         return calendar_service.create_event(
             tenant_id=tenant_id,
             title=params.title,
             start_time=params.start_time,
             duration_minutes=dur,
-            location="",
-            attendees=params.attendees
+            location=loc,
+            attendees=params.attendees,
+            idempotency_key=idempotency_key
+        )
+
+    def verify_native(self, native_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        if not native_result.get("success"):
+            return CapabilityOutcome(
+                success=False,
+                verified=False,
+                reason=native_result.get("error", "Calendar creation failed"),
+                evidence=native_result
+            )
+        ev = native_result.get("event", {})
+        ev_id = ev.get("id")
+        from ..first_party_services import calendar_service
+        verified_ev = calendar_service.get_event(tenant_id, ev_id)
+        if verified_ev and verified_ev["title"] == ev.get("title"):
+            return CapabilityOutcome(
+                success=True,
+                verified=True,
+                reason=f"Event '{ev.get('title')}' verified in durable SQLite storage at {ev.get('start_time')}.",
+                evidence={"event": verified_ev}
+            )
+        return CapabilityOutcome(
+            success=False,
+            verified=False,
+            reason="Event not found in persistent database after creation.",
+            evidence=native_result
         )

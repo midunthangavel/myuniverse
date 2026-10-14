@@ -93,6 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 7. Quick Scenario Buttons
   const scenarioActions = {
+    compound: 'Schedule lunch for Friday, order sushi for two people, notify my team, and add a follow-up task',
     movie: 'Book a movie for tonight',
     screen: 'What is on my screen right now?',
     biryani: 'Find a good biryani place nearby for dinner',
@@ -212,21 +213,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 8. Phone Nav Chips (Home, Mail, Cinema, Foodie, Screen Inspector)
+  // 8. Phone Nav Chips (Home, Calendar, Food, Messages, Tasks, Cinema, Screen Inspector)
   const navHome = document.getElementById('btn-nav-home');
-  const navMail = document.getElementById('btn-nav-mail');
-  const navMovies = document.getElementById('btn-nav-movies');
+  const navCalendar = document.getElementById('btn-nav-calendar');
   const navFood = document.getElementById('btn-nav-food');
+  const navMessages = document.getElementById('btn-nav-messages');
+  const navTasks = document.getElementById('btn-nav-tasks');
+  const navMovies = document.getElementById('btn-nav-movies');
+  const navMail = document.getElementById('btn-nav-mail');
   const toggleInspectorBtn = document.getElementById('btn-toggle-screen-inspector');
 
   if (navHome) navHome.addEventListener('click', () => phone.setApp('home'));
-  if (navMail) navMail.addEventListener('click', () => phone.setApp('mail'));
-  if (navMovies) navMovies.addEventListener('click', () => phone.setApp('cinema'));
+  if (navCalendar) navCalendar.addEventListener('click', () => phone.setApp('calendar'));
   if (navFood) navFood.addEventListener('click', () => phone.setApp('food'));
-  const navRides = document.getElementById('btn-nav-rides');
-  const navMaps = document.getElementById('btn-nav-maps');
-  if (navRides) navRides.addEventListener('click', () => phone.setApp('rides'));
-  if (navMaps) navMaps.addEventListener('click', () => phone.setApp('maps'));
+  if (navMessages) navMessages.addEventListener('click', () => phone.setApp('messages'));
+  if (navTasks) navTasks.addEventListener('click', () => phone.setApp('tasks'));
+  if (navMovies) navMovies.addEventListener('click', () => phone.setApp('cinema'));
+  if (navMail) navMail.addEventListener('click', () => phone.setApp('mail'));
   if (toggleInspectorBtn) {
     toggleInspectorBtn.addEventListener('click', () => phone.toggleInspector());
   }

@@ -66,11 +66,39 @@ class TaskCreateCapability(CapabilityContract):
             evidence={"result": last_step}
         )
 
-    def execute_native(self, params: TaskCreateInput, tenant_id: str = "tenant_default") -> Dict[str, Any]:
+    def execute_native(self, params: TaskCreateInput, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         from ..first_party_services import tasks_service
         return tasks_service.create_task(
             tenant_id=tenant_id,
             title=params.title,
             due_date=params.due_date or "",
-            priority=params.priority
+            priority=params.priority,
+            idempotency_key=idempotency_key
+        )
+
+    def verify_native(self, native_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        if not native_result.get("success"):
+            return CapabilityOutcome(
+                success=False,
+                verified=False,
+                reason=native_result.get("error", "Task creation failed"),
+                evidence=native_result
+            )
+        t = native_result.get("task", {})
+        t_id = t.get("id")
+        from ..first_party_services import tasks_service
+        all_tasks = tasks_service.list_tasks(tenant_id)
+        matched = next((item for item in all_tasks if item["id"] == t_id), None)
+        if matched and matched["title"] == t.get("title"):
+            return CapabilityOutcome(
+                success=True,
+                verified=True,
+                reason=f"Task '{t.get('title')}' verified in durable SQLite storage (Priority: {t.get('priority')}).",
+                evidence={"task": matched}
+            )
+        return CapabilityOutcome(
+            success=False,
+            verified=False,
+            reason="Task not found in persistent database after creation.",
+            evidence=native_result
         )

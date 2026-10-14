@@ -86,8 +86,41 @@ class FoodOrderCapability(CapabilityContract):
             evidence={"last_observation": last_step.get("observation", {})}
         )
 
-    def execute_native(self, params: FoodOrderInput, tenant_id: str = "tenant_default") -> Dict[str, Any]:
+    def execute_native(self, params: FoodOrderInput, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         from ..first_party_services import food_service
         food_service.clear_cart(tenant_id)
         food_service.add_to_cart(tenant_id, params.item, params.quantity)
-        return food_service.checkout(tenant_id, address=params.delivery_address or "742 Evergreen Terrace")
+        rest_name = params.restaurant or "Sushi Zen"
+        return food_service.checkout(
+            tenant_id=tenant_id,
+            address=params.delivery_address or "742 Evergreen Terrace",
+            restaurant_name=rest_name,
+            idempotency_key=idempotency_key
+        )
+
+    def verify_native(self, native_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        if not native_result.get("success"):
+            return CapabilityOutcome(
+                success=False,
+                verified=False,
+                reason=native_result.get("error", "Food order failed"),
+                evidence=native_result
+            )
+        order = native_result.get("order", {})
+        ord_id = order.get("order_id")
+        from ..first_party_services import food_service
+        orders = food_service.list_orders(tenant_id)
+        matched = next((o for o in orders if o["order_id"] == ord_id), None)
+        if matched and matched["status"] == "CONFIRMED":
+            return CapabilityOutcome(
+                success=True,
+                verified=True,
+                reason=f"Order '{ord_id}' confirmed in durable SQLite storage for {matched.get('restaurant_name')} (Total: ${matched.get('total')}).",
+                evidence={"order": matched}
+            )
+        return CapabilityOutcome(
+            success=False,
+            verified=False,
+            reason="Order not found in persistent database after checkout.",
+            evidence=native_result
+        )
