@@ -268,17 +268,18 @@ class MultiCapabilityOrchestrator:
 
                 else:
                     # Validate and commit user approval
-                    task_id = f"gate_{plan.plan_id}_{step.step_id}"
+                    req_entry = financial_gate.ledger.get_request_by_token(authorization_token)
+                    task_id = req_entry["task_id"] if req_entry else f"gate_{plan.plan_id}_{step.step_id}"
                     auth_commit = financial_gate.authorize_transaction(
                         token_str=authorization_token,
                         task_id=task_id,
                         user_id=tenant_id
                     )
-                    if not auth_commit:
+                    if not auth_commit.get("success"):
                         yield {
                             "type": "STEP_FAILED",
                             "step_id": step.step_id,
-                            "error": "Cryptographic financial approval token validation failed or expired."
+                            "error": f"Cryptographic financial approval failed: {auth_commit.get('reason', 'INVALID_TOKEN_OR_EXPIRED')}"
                         }
                         all_verified = False
                         continue

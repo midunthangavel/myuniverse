@@ -413,6 +413,22 @@ class FinancialAuditLedger:
             return {"user_id": row[0], "action": row[1], "amount": row[2], "status": row[3]}
         return None
 
+    def get_request_by_token(self, token: str) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT task_id, user_id, action, amount, status
+            FROM financial_audit_ledger
+            WHERE token = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (token,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return {"task_id": row[0], "user_id": row[1], "action": row[2], "amount": row[3], "status": row[4]}
+        return None
+
 
 class FinancialGate:
     """Master governance orchestrator for high-risk and payment actions."""
@@ -466,7 +482,18 @@ class FinancialGate:
         Validates cryptographic proof (server challenge signature or one-time token)
         and commits atomic authorization state transition.
         """
-        req = self.ledger.get_request(task_id)
+        if not task_id and token_str:
+            req_tok = self.ledger.get_request_by_token(token_str)
+            if req_tok:
+                task_id = req_tok["task_id"]
+
+        req = self.ledger.get_request(task_id) if task_id else None
+        if not req and token_str:
+            req_tok = self.ledger.get_request_by_token(token_str)
+            if req_tok:
+                task_id = req_tok["task_id"]
+                req = req_tok
+
         if not req:
             return {"success": False, "reason": "TASK_NOT_FOUND"}
         if req["status"] != "PENDING_APPROVAL":
