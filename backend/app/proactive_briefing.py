@@ -12,6 +12,7 @@ Provides ambient, autonomous intelligence over first-party SQLite state:
 import time
 import uuid
 import re
+import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
@@ -105,18 +106,35 @@ class ProactiveBriefingEngine:
                 priority="NORMAL"
             )
 
-    def analyze_schedule(self, tenant_id: str) -> Dict[str, Any]:
-        """Performs deep schedule, conflict, nutrition, and task analysis."""
+    def seed_demo_data(self, tenant_id: str):
+        """Explicitly seeds demo data. Call from /api/demo/seed, NEVER from read paths."""
         self.seed_demo_schedule_if_empty(tenant_id)
-        
+
+    def analyze_schedule(self, tenant_id: str, target_date: Optional[str] = None) -> Dict[str, Any]:
+        """Performs deep schedule, conflict, nutrition, and task analysis.
+        Pure read-only — never mutates state. Filters events to target_date (defaults to today)."""
         events = calendar_service.list_events(tenant_id)
         tasks = tasks_service.list_tasks(tenant_id, completed=False)
         recent_orders = food_service.list_orders(tenant_id)
 
-        # 1. Parse and sort events chronologically
-        timeline = []
+        # Filter events to the target date (defaults to today)
+        if target_date is None:
+            target_date = datetime.now().strftime("%Y-%m-%d")
+
+        filtered_events = []
         for ev in events:
-            mins = _parse_time_minutes(ev["start_time"]) or 540  # default 9:00 AM
+            ev_date = ev.get("date", "")
+            # Include events that match today, have no date (legacy), or are explicitly today
+            if not ev_date or ev_date == target_date:
+                filtered_events.append(ev)
+
+        # 1. Parse and sort events chronologically — skip unparseable times with warning
+        timeline = []
+        for ev in filtered_events:
+            mins = _parse_time_minutes(ev["start_time"])
+            if mins is None:
+                logging.warning(f"[ProactiveBriefing] Skipping event '{ev.get('title', 'unknown')}' — unparseable start_time: '{ev['start_time']}'")
+                continue
             duration = ev.get("duration_minutes", 60)
             timeline.append({
                 **ev,

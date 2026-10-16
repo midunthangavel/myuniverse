@@ -102,6 +102,8 @@ class SynapseWebSocketClient(
                 val amount = msg.optString("amount", plan?.optString("amount", "$0.00") ?: "$0.00")
                 val action = msg.optString("action", plan?.optString("summary", "Payment Action") ?: "Payment Action")
                 val scope = msg.optString("scope", "FINANCIAL_PAYMENT")
+                val challengeNonce = msg.optString("challenge_nonce", plan?.optString("challenge_nonce", "") ?: "")
+                val payloadToSign = msg.optString("payload_to_sign", plan?.optString("payload_to_sign", "") ?: "")
 
                 Log.w(TAG, "HIGH RISK PROMPT received. Launching Native Biometric Gate for Task: $taskId ($amount)")
 
@@ -111,6 +113,8 @@ class SynapseWebSocketClient(
                     putExtra("amount", amount)
                     putExtra("action", action)
                     putExtra("scope", scope)
+                    putExtra("challenge_nonce", challengeNonce)
+                    putExtra("payload_to_sign", payloadToSign)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
@@ -337,6 +341,7 @@ class SynapseWebSocketClient(
         token: String?,
         status: String,
         signature: String? = null,
+        challengeNonce: String? = null,
         amount: String? = null,
         action: String? = null,
         reason: String? = null
@@ -347,6 +352,7 @@ class SynapseWebSocketClient(
             put("token", token ?: "")
             put("status", status)
             put("signature", signature ?: "")
+            put("challenge_nonce", challengeNonce ?: "")
             put("amount", amount ?: "")
             put("action", action ?: "")
             put("reason", reason ?: "")

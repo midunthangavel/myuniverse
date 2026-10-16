@@ -69,8 +69,13 @@ def test_invalid_credentials_rejected():
 
 
 def test_public_session_ticket_issuance_and_access():
-    """Verify that clients can exchange tenant identity for a valid scoped session ticket without master secrets."""
-    res = client.post("/api/auth/session", json={"tenant_id": "tenant_alice"})
+    """Verify that clients can exchange tenant identity for a valid scoped session ticket with authentication."""
+    # Unauthenticated request must be rejected (Security Hardening P0)
+    res_unauth = client.post("/api/auth/session", json={"tenant_id": "tenant_alice"})
+    assert res_unauth.status_code in (401, 403)
+
+    # Authenticated admin request succeeds
+    res = client.post("/api/auth/session", json={"tenant_id": "tenant_alice"}, headers={"X-API-Key": EXPECTED_API_KEY})
     assert res.status_code == 200
     data = res.json()
     assert "session_token" in data

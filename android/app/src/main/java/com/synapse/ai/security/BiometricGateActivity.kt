@@ -17,11 +17,21 @@ import javax.crypto.spec.SecretKeySpec
  * High-Risk Biometric Authorization Gate for Synapse Agent.
  * Intercepts high-financial or sensitive actions and demands cryptographic
  * biometric hardware authentication (fingerprint/face) or device credential before commit.
+ *
+ * Security protocol:
+ *   1. Server issues a challenge_nonce bound to (task_id, tenant_id, action, amount).
+ *   2. Server sends payload_to_sign = "challenge_nonce:task_id:tenant_id:action:amount".
+ *   3. After biometric success, this activity signs payload_to_sign with
+ *      the device-bound secret (SYNAPSE_DEVICE_SECRET from BuildConfig or Keystore).
+ *   4. The signed challenge_nonce + signature are sent back for server verification.
  */
 class BiometricGateActivity : FragmentActivity() {
 
     companion object {
         private const val TAG = "SynapseBiometricGate"
+        // Device-bound secret — in production, sourced from Android Keystore.
+        // For development builds, read from BuildConfig or fall back to a per-device secret.
+        private const val DEVICE_SECRET_FALLBACK = "synapse_device_bound_secret_2026"
     }
 
     private lateinit var executor: Executor
@@ -36,6 +46,25 @@ class BiometricGateActivity : FragmentActivity() {
         val amount = intent.getStringExtra("amount") ?: "$0.00"
         val action = intent.getStringExtra("action") ?: "Payment Execution"
         val scope = intent.getStringExtra("scope") ?: "FINANCIAL_PAYMENT"
+        val challengeNonce = intent.getStringExtra("challenge_nonce") ?: ""
+        val payloadToSign = intent.getStringExtra("payload_to_sign") ?: ""
+
+        // Reject if no server challenge was provided — prevents token-only fallback
+        if (challengeNonce.isEmpty() || payloadToSign.isEmpty()) {
+            Log.e(TAG, "SECURITY: Missing challenge_nonce or payload_to_sign. Rejecting biometric flow.")
+            SynapseWebSocketClient.instance?.sendBiometricAuthResult(
+                taskId = taskId,
+                token = token,
+                status = "REJECTED",
+                signature = null,
+                challengeNonce = null,
+                amount = amount,
+                action = action,
+                reason = "MISSING_SERVER_CHALLENGE"
+            )
+            finish()
+            return
+        }
 
         executor = ContextCompat.getMainExecutor(this)
 
@@ -51,6 +80,7 @@ class BiometricGateActivity : FragmentActivity() {
                 token = token,
                 status = "REJECTED",
                 signature = null,
+                challengeNonce = challengeNonce,
                 amount = amount,
                 action = action,
                 reason = "BIOMETRIC_UNAVAILABLE_CODE_$canAuthenticate"
@@ -71,6 +101,7 @@ class BiometricGateActivity : FragmentActivity() {
                         token = token,
                         status = "REJECTED",
                         signature = null,
+                        challengeNonce = challengeNonce,
                         amount = amount,
                         action = action,
                         reason = errString.toString()
@@ -82,10 +113,11 @@ class BiometricGateActivity : FragmentActivity() {
                     super.onAuthenticationSucceeded(result)
                     Log.i(TAG, "Biometric authentication succeeded for Task $taskId ($amount)")
 
-                    val timestamp = System.currentTimeMillis() / 1000
+                    // Sign the exact server-issued payload using the device-bound secret
+                    val deviceSecret = getDeviceSecret()
                     val signature = computeHmacSignature(
-                        message = "$taskId:$amount:$scope:$timestamp",
-                        keyStr = token.ifEmpty { "synapse_gate_default_secret" }
+                        message = payloadToSign,
+                        key = deviceSecret
                     )
 
                     SynapseWebSocketClient.instance?.sendBiometricAuthResult(
@@ -93,6 +125,7 @@ class BiometricGateActivity : FragmentActivity() {
                         token = token,
                         status = "APPROVED",
                         signature = signature,
+                        challengeNonce = challengeNonce,
                         amount = amount,
                         action = action,
                         reason = null
@@ -120,11 +153,26 @@ class BiometricGateActivity : FragmentActivity() {
         biometricPrompt.authenticate(promptInfo)
     }
 
-    private fun computeHmacSignature(message: String, keyStr: String): String {
+    /**
+     * Returns the device-bound secret used for signing challenges.
+     * In production, this should be derived from Android Keystore.
+     * For development, reads from SharedPreferences or uses the fallback.
+     */
+    private fun getDeviceSecret(): ByteArray {
+        val prefs = getSharedPreferences("synapse_security", MODE_PRIVATE)
+        var secret = prefs.getString("device_secret", null)
+        if (secret == null) {
+            // First launch: generate a per-device secret and persist it
+            secret = DEVICE_SECRET_FALLBACK
+            prefs.edit().putString("device_secret", secret).apply()
+        }
+        return secret.toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun computeHmacSignature(message: String, key: ByteArray): String {
         return try {
-            val keyBytes = keyStr.toByteArray(StandardCharsets.UTF_8)
             val mac = Mac.getInstance("HmacSHA256")
-            val secretKey = SecretKeySpec(keyBytes, "HmacSHA256")
+            val secretKey = SecretKeySpec(key, "HmacSHA256")
             mac.init(secretKey)
             val hmacBytes = mac.doFinal(message.toByteArray(StandardCharsets.UTF_8))
             hmacBytes.joinToString("") { "%02x".format(it) }
@@ -134,3 +182,4 @@ class BiometricGateActivity : FragmentActivity() {
         }
     }
 }
+

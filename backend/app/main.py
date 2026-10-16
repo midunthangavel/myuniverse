@@ -93,7 +93,7 @@ if not EXPECTED_API_KEY:
     raise RuntimeError("CRITICAL SECURITY ERROR: SYNAPSE_API_KEY must be configured in environment (.env)!")
 
 # Publicly accessible routes that bypass API Key middleware (strictly read-only / auth endpoints)
-PUBLIC_ROUTES = {"/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/session"}
+PUBLIC_ROUTES = {"/api/health", "/docs", "/openapi.json", "/redoc"}
 
 def create_session_token(tenant_id: str = "tenant_primary", principal: str = "web_cockpit", ttl_seconds: int = 3600) -> str:
     """Issues a cryptographically signed HMAC session ticket for cockpit clients (no master API keys in browser)."""
@@ -1133,19 +1133,41 @@ def resolve_tenant(request: Request, body_tenant: Optional[str] = None) -> str:
 
 # ==========================================
 # REST API: Session Ticket Issuance for Web Cockpit
+# Requires authenticated admin API key. Tenant is derived from the
+# verified principal — never from the untrusted request body.
 # ==========================================
 class SessionIssueRequest(BaseModel):
-    tenant_id: Optional[str] = "tenant_primary"
+    tenant_id: Optional[str] = None  # Only honoured for admin_api_key principal
 
 @app.post("/api/auth/session")
-def issue_session_ticket(req: Optional[SessionIssueRequest] = None):
-    tenant = req.tenant_id if req and req.tenant_id else "tenant_primary"
-    token = create_session_token(tenant_id=tenant, principal="web_cockpit")
+def issue_session_ticket(request: Request, req: Optional[SessionIssueRequest] = None):
+    """Issues a scoped session token. Only admin API key holders may request
+    cross-tenant tokens; all other principals receive a token bound to their
+    own verified tenant."""
+    principal = getattr(request.state, "principal", None)
+    auth_tenant = getattr(request.state, "tenant_id", None)
+
+    if not principal:
+        raise HTTPException(status_code=401, detail="Session issuance requires authentication (X-API-Key).")
+
+    # Admin principal may specify a target tenant for test / multi-tenant scenarios
+    if principal == "admin_api_key":
+        target_tenant = (req.tenant_id if req and req.tenant_id else None) or auth_tenant or "tenant_primary"
+    else:
+        # Non-admin principals are strictly bound to their authenticated tenant
+        target_tenant = auth_tenant or "tenant_primary"
+        if req and req.tenant_id and req.tenant_id != target_tenant:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Principal '{principal}' cannot issue sessions for tenant '{req.tenant_id}'."
+            )
+
+    token = create_session_token(tenant_id=target_tenant, principal="web_cockpit")
     return {
         "session_token": token,
         "token_type": "Bearer",
         "expires_in": 3600,
-        "tenant_id": tenant
+        "tenant_id": target_tenant
     }
 
 
@@ -1308,6 +1330,18 @@ class ApplyBriefingActionRequest(BaseModel):
     action_type: str
     payload: Dict[str, Any]
     tenant_id: Optional[str] = None
+    approval_token: Optional[str] = None  # Required for FOOD_ORDER actions
+
+@app.post("/api/demo/seed")
+def seed_demo_data_endpoint(request: Request, tenant_id: Optional[str] = None):
+    """Explicitly seeds demo data into first-party services. Requires admin API key.
+    This is the ONLY way to seed demo data — read endpoints never mutate state."""
+    principal = getattr(request.state, "principal", None)
+    if principal != "admin_api_key":
+        raise HTTPException(status_code=403, detail="Demo seeding requires admin API key.")
+    tenant = resolve_tenant(request, tenant_id)
+    proactive_briefing_engine.seed_demo_data(tenant)
+    return {"success": True, "message": f"Demo data seeded for tenant '{tenant}'."}
 
 @app.get("/api/proactive/briefing")
 async def get_proactive_briefing_endpoint(
@@ -1326,12 +1360,44 @@ def analyze_schedule_endpoint(request: Request, tenant_id: Optional[str] = None)
 @app.post("/api/proactive/briefing/apply-action")
 def apply_briefing_action_endpoint(req: ApplyBriefingActionRequest, request: Request):
     tenant = resolve_tenant(request, req.tenant_id)
+
+    # Financial gate: FOOD_ORDER actions require a valid approval token before execution
+    if req.action_type == "FOOD_ORDER":
+        if not req.approval_token:
+            # Issue a new challenge and return it — do NOT execute the order
+            gate_result = financial_gate.evaluate_transaction(
+                task_id=f"proactive_{req.rec_id}",
+                action="FOOD_ORDER",
+                amount=str(sum(it.get("price", 0) * it.get("quantity", 1) for it in req.payload.get("items", []))),
+                user_id=tenant
+            )
+            return {
+                "success": False,
+                "requires_approval": True,
+                "message": "Financial authorization required for food order.",
+                "governance": gate_result
+            }
+        else:
+            # Verify the approval token before proceeding
+            auth_res = financial_gate.authorize_transaction(
+                token_str=req.approval_token,
+                task_id=f"proactive_{req.rec_id}",
+                user_id=tenant
+            )
+            if not auth_res.get("success"):
+                return {
+                    "success": False,
+                    "reason": auth_res.get("reason", "AUTHORIZATION_FAILED"),
+                    "message": "Financial authorization failed. Order not placed."
+                }
+
     return proactive_briefing_engine.apply_recommendation(
         tenant_id=tenant,
         rec_id=req.rec_id,
         action_type=req.action_type,
         payload=req.payload
     )
+
 
 # ==========================================
 # REST API: FastPath & Governance Testing
