@@ -5,6 +5,7 @@ from .base import CapabilityContract, RiskLevel, PreconditionResult, CapabilityP
 class AlarmSetInput(BaseModel):
     time_str: str = Field(description="Time to set alarm, e.g., '6:30 AM' or '07:00'")
     label: str = Field(default="Wake up", description="Label for alarm")
+    require_hardware: bool = Field(default=False, description="If true, strictly requires physical device and rejects simulated fallback")
 
 class AlarmSetCapability(CapabilityContract):
     name = "alarm.set"
@@ -52,8 +53,19 @@ class AlarmSetCapability(CapabilityContract):
         """Direct native execution via device controller without UI clicking."""
         import asyncio
         from ..device.controller_factory import device_factory
+        from ..device.base_controller import ActionResult
 
         async def _run():
+            if params.require_hardware:
+                ctrl = device_factory.android
+                if not await ctrl.is_available():
+                    return ActionResult(
+                        success=False,
+                        action="SET_ALARM",
+                        details={"time_str": params.time_str, "label": params.label, "hardware_required": True, "verified": False},
+                        error="Hardware verification failed: physical Android device is offline / not connected via ADB."
+                    )
+                return await ctrl.set_alarm(time_str=params.time_str, label=params.label)
             ctrl = await device_factory.get_controller()
             return await ctrl.set_alarm(time_str=params.time_str, label=params.label)
 
@@ -83,7 +95,13 @@ class AlarmSetCapability(CapabilityContract):
         success = raw_result.get("success", False)
         alarm = raw_result.get("alarm", {})
         details = alarm.get("details", {})
-        verified = success and (details.get("verified", False) or details.get("mode") == "simulator")
+        hardware_required = details.get("hardware_required", False)
+
+        if hardware_required:
+            verified = success and bool(details.get("verified", False))
+        else:
+            verified = success and (bool(details.get("verified", False)) or details.get("mode") == "simulator")
+
         return CapabilityOutcome(
             success=success,
             verified=verified,

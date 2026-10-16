@@ -189,6 +189,13 @@ class AndroidADBController(BaseDeviceController):
 
     async def set_alarm(self, time_str: str, label: str = "Wake up", skip_ui: bool = True) -> ActionResult:
         """Sets a real hardware clock alarm on Android using standard Intent."""
+        if not await self.is_available():
+            return ActionResult(
+                success=False,
+                action="SET_ALARM",
+                details={"time_str": time_str, "label": label, "verified": False},
+                error="Physical Android device is offline / not connected via ADB."
+            )
         parsed = self.parse_time_to_hour_minute(time_str)
         if not parsed:
             return ActionResult(
@@ -211,7 +218,7 @@ class AndroidADBController(BaseDeviceController):
             return ActionResult(
                 success=False,
                 action="SET_ALARM",
-                details={"hour": hour, "minute": minute, "label": label},
+                details={"hour": hour, "minute": minute, "label": label, "verified": False},
                 error=err or out
             )
         verified = await self.verify_alarm_scheduled(hour, minute)
@@ -229,9 +236,48 @@ class AndroidADBController(BaseDeviceController):
         )
 
     async def verify_alarm_scheduled(self, hour: int, minute: int) -> bool:
-        """Verifies if an alarm near the given hour/minute is registered in dumpsys."""
+        """Verifies if an alarm for the specific hour and minute is registered in dumpsys.
+        Fails if device is offline or if no clock package alarm matches the target time."""
+        if not await self.is_available():
+            return False
+
         code, out, _ = await self._run_adb(["shell", "dumpsys", "alarm"])
         if code != 0 or not out:
             return False
+
+        clock_packages = [
+            "deskclock",
+            "clockpackage",
+            "com.google.android.deskclock",
+            "com.sec.android.app.clockpackage",
+            "com.android.deskclock",
+            "com.oneplus.deskclock",
+            "com.coloros.alarm",
+            "com.motorola.blur.alarmclock"
+        ]
+
         out_lower = out.lower()
-        return ("deskclock" in out_lower or "clockpackage" in out_lower or "alarm" in out_lower)
+        has_clock_pkg = any(pkg in out_lower for pkg in clock_packages)
+        if not has_clock_pkg:
+            return False
+
+        # Build candidate time string patterns (e.g., "07:30", "7:30")
+        h24_pad = f"{hour:02d}:{minute:02d}"
+        h24_raw = f"{hour}:{minute:02d}"
+        h12_val = (hour % 12) or 12
+        h12_pad = f"{h12_val:02d}:{minute:02d}"
+        h12_raw = f"{h12_val}:{minute:02d}"
+
+        time_patterns = {h24_pad, h24_raw, h12_pad, h12_raw}
+
+        # Check dumpsys lines for matching time and package context
+        for line in out.splitlines():
+            line_lower = line.lower()
+            if any(pkg in line_lower for pkg in clock_packages) or "next alarm clock" in line_lower or "alarmclockinfo" in line_lower:
+                if any(tp in line for tp in time_patterns):
+                    return True
+
+        if any(tp in out for tp in time_patterns):
+            return True
+
+        return False

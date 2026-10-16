@@ -72,6 +72,52 @@ def test_alarm_native_capability_execution():
     assert "Morning Workout" in verif.reason
 
 
+def test_hardware_required_fails_when_offline():
+    """Verify that when require_hardware=True, offline device does NOT silently fallback to simulator."""
+    alarm_cap = capability_registry.get("alarm.set")
+    adb = AndroidADBController()
+
+    async def _test():
+        is_avail = await adb.is_available()
+        if not is_avail:
+            # Device is offline: execute_native with require_hardware=True must fail closed
+            params = AlarmSetInput(time_str="08:00 AM", label="Test Offline", require_hardware=True)
+            res = alarm_cap.execute_native(params, tenant_id="tenant_hw_test")
+            assert res["success"] is False
+            assert "Hardware verification failed" in res["alarm"]["error"]
+            verif = alarm_cap.verify_native(res, tenant_id="tenant_hw_test")
+            assert verif.verified is False
+    asyncio.run(_test())
+
+
+def test_strict_alarm_dumpsys_verification_logic():
+    """Verify that verify_alarm_scheduled requires matching clock package AND specific hour/minute."""
+    adb = AndroidADBController()
+
+    # 1. Generic string with "alarm" but no clock package and no time -> False
+    async def _test():
+        # Inject mock _run_adb
+        original_run = adb._run_adb
+
+        # Case A: Generic system alarm (e.g., GMS or battery) without clock package
+        adb._run_adb = lambda args: asyncio.sleep(0, result=(0, "AlarmManager: com.google.android.gms periodic alarm ping", ""))
+        # Even if available is forced True:
+        adb.is_available = lambda: asyncio.sleep(0, result=True)
+        assert await adb.verify_alarm_scheduled(7, 30) is False, "Generic alarm text must be rejected!"
+
+        # Case B: Clock package present, but wrong time (09:45 instead of 07:30)
+        adb._run_adb = lambda args: asyncio.sleep(0, result=(0, "tag=*alarm*:com.google.android.deskclock next=09:45", ""))
+        assert await adb.verify_alarm_scheduled(7, 30) is False, "Mismatching alarm time must be rejected!"
+
+        # Case C: Clock package present AND exact matching time 07:30
+        adb._run_adb = lambda args: asyncio.sleep(0, result=(0, "tag=*alarm*:com.google.android.deskclock triggerAtTime=2026-10-16 07:30:00", ""))
+        assert await adb.verify_alarm_scheduled(7, 30) is True, "Matching clock package and time must verify!"
+
+        # Restore
+        adb._run_adb = original_run
+    asyncio.run(_test())
+
+
 def test_device_controller_factory_resolution():
     """Verify that DeviceControllerFactory defaults to simulator when no real phone is attached."""
     async def _test():
@@ -218,6 +264,10 @@ if __name__ == "__main__":
     print("  [PASS] Alarm time parser verified.")
     test_alarm_native_capability_execution()
     print("  [PASS] Alarm native capability execution verified.")
+    test_hardware_required_fails_when_offline()
+    print("  [PASS] Hardware-required offline fail-closed enforcement verified.")
+    test_strict_alarm_dumpsys_verification_logic()
+    print("  [PASS] Strict dumpsys alarm package and time verification verified.")
     test_device_controller_factory_resolution()
     print("  [PASS] Device controller factory resolution verified.")
     test_proactive_briefing_unauthenticated_fails()
