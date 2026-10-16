@@ -64,3 +64,7 @@ class BaseDeviceController(ABC):
     @abstractmethod
     async def get_ui_hierarchy(self) -> Dict[str, Any]:
         pass
+
+    @abstractmethod
+    async def set_alarm(self, time_str: str, label: str = "Wake up", skip_ui: bool = True) -> ActionResult:
+        pass

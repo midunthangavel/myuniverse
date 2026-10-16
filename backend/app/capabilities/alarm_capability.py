@@ -47,3 +47,46 @@ class AlarmSetCapability(CapabilityContract):
             reason=f"Alarm successfully scheduled for {plan.summary}." if verified else "Failed to verify alarm.",
             evidence={"result": last_step}
         )
+
+    def execute_native(self, params: AlarmSetInput, tenant_id: str = "tenant_default", idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+        """Direct native execution via device controller without UI clicking."""
+        import asyncio
+        from ..device.controller_factory import device_factory
+
+        async def _run():
+            ctrl = await device_factory.get_controller()
+            return await ctrl.set_alarm(time_str=params.time_str, label=params.label)
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, _run())
+                    action_res = future.result(timeout=10.0)
+            else:
+                action_res = loop.run_until_complete(_run())
+        except Exception as e:
+            action_res = asyncio.run(_run())
+
+        return {
+            "success": action_res.success,
+            "alarm": {
+                "time_str": params.time_str,
+                "label": params.label,
+                "details": action_res.details,
+                "error": action_res.error
+            }
+        }
+
+    def verify_native(self, raw_result: Dict[str, Any], tenant_id: str = "tenant_default") -> CapabilityOutcome:
+        success = raw_result.get("success", False)
+        alarm = raw_result.get("alarm", {})
+        details = alarm.get("details", {})
+        verified = success and (details.get("verified", False) or details.get("mode") == "simulator")
+        return CapabilityOutcome(
+            success=success,
+            verified=verified,
+            reason=f"Alarm scheduled for {alarm.get('time_str')} ('{alarm.get('label')}')." if success else alarm.get("error", "Alarm failed to schedule."),
+            evidence=raw_result
+        )

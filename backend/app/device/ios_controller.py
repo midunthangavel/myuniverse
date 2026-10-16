@@ -132,3 +132,10 @@ class IOSWDAController(BaseDeviceController):
         except Exception as e:
             return {"success": False, "error": str(e)}
         return {"success": False, "error": "WDA source tree failed"}
+
+    async def set_alarm(self, time_str: str, label: str = "Wake up", skip_ui: bool = True) -> ActionResult:
+        return ActionResult(
+            success=False,
+            action="SET_ALARM",
+            error="Alarm intent not supported via iOS WDA without Clock app UI automation"
+        )

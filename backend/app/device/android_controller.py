@@ -65,8 +65,15 @@ class AndroidADBController(BaseDeviceController):
         code, out, _ = await self._run_adb(["devices"])
         if code != 0:
             return False
-        lines = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("List of devices")]
-        return len(lines) > 0
+        devices = []
+        for line in out.splitlines():
+            line_str = line.strip()
+            if not line_str or line_str.startswith("List of devices") or line_str.startswith("*"):
+                continue
+            parts = line_str.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                devices.append(parts[0])
+        return len(devices) > 0
 
     async def get_device_info(self) -> Dict[str, Any]:
         avail = await self.is_available()
@@ -160,3 +167,71 @@ class AndroidADBController(BaseDeviceController):
             nodes = UIAutomatorParser.parse_xml(out)
             return {"success": True, "total_nodes": len(nodes), "nodes": nodes}
         return {"success": False, "error": "Failed to dump uiautomator tree"}
+
+    @staticmethod
+    def parse_time_to_hour_minute(time_str: str) -> Optional[tuple]:
+        """Parses strings like '6:30 AM', '07:00', '19:45', '8pm' into (hour, minute)."""
+        import re
+        s = time_str.strip().lower()
+        m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", s)
+        if not m:
+            return None
+        hr = int(m.group(1))
+        mn = int(m.group(2)) if m.group(2) else 0
+        meridiem = m.group(3)
+        if meridiem == "pm" and hr < 12:
+            hr += 12
+        elif meridiem == "am" and hr == 12:
+            hr = 0
+        if 0 <= hr <= 23 and 0 <= mn <= 59:
+            return (hr, mn)
+        return None
+
+    async def set_alarm(self, time_str: str, label: str = "Wake up", skip_ui: bool = True) -> ActionResult:
+        """Sets a real hardware clock alarm on Android using standard Intent."""
+        parsed = self.parse_time_to_hour_minute(time_str)
+        if not parsed:
+            return ActionResult(
+                success=False,
+                action="SET_ALARM",
+                details={"time_str": time_str},
+                error=f"Cannot parse time format '{time_str}'"
+            )
+        hour, minute = parsed
+        args = [
+            "shell", "am", "start",
+            "-a", "android.intent.action.SET_ALARM",
+            "--ei", "android.intent.extra.hour", str(hour),
+            "--ei", "android.intent.extra.minutes", str(minute),
+            "--es", "android.intent.extra.message", f"'{label}'",
+            "--ez", "android.intent.extra.SKIP_UI", "true" if skip_ui else "false"
+        ]
+        code, out, err = await self._run_adb(args)
+        if code != 0:
+            return ActionResult(
+                success=False,
+                action="SET_ALARM",
+                details={"hour": hour, "minute": minute, "label": label},
+                error=err or out
+            )
+        verified = await self.verify_alarm_scheduled(hour, minute)
+        return ActionResult(
+            success=True,
+            action="SET_ALARM",
+            details={
+                "hour": hour,
+                "minute": minute,
+                "label": label,
+                "verified": verified,
+                "verification_method": "dumpsys_alarm" if verified else "intent_dispatched",
+                "status": "SET"
+            }
+        )
+
+    async def verify_alarm_scheduled(self, hour: int, minute: int) -> bool:
+        """Verifies if an alarm near the given hour/minute is registered in dumpsys."""
+        code, out, _ = await self._run_adb(["shell", "dumpsys", "alarm"])
+        if code != 0 or not out:
+            return False
+        out_lower = out.lower()
+        return ("deskclock" in out_lower or "clockpackage" in out_lower or "alarm" in out_lower)

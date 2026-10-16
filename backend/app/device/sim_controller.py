@@ -88,3 +88,17 @@ class SimulatorController(BaseDeviceController):
             "source": "synapse_phone_dom",
             "nodes_count": 8
         }
+
+    async def set_alarm(self, time_str: str, label: str = "Wake up", skip_ui: bool = True) -> ActionResult:
+        self.last_action_time = time.time()
+        return ActionResult(
+            success=True,
+            action="SET_ALARM",
+            details={
+                "time_str": time_str,
+                "label": label,
+                "verified": True,
+                "mode": "simulator",
+                "status": "SET"
+            }
+        )
